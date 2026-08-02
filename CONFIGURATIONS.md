@@ -16,6 +16,27 @@ tương ứng — đừng để nguyên "mặc định" nếu dự án thực s�
 Chuyển từ C sang A giữa chừng tốn công hơn nhiều (phải dựng lại API,
 di trú toàn bộ business logic khỏi web).
 
+## Cách nhanh nhất: chạy script
+
+Thay vì làm tay từng bước bên dưới, `scripts/scaffold.js` tự động hoá
+toàn bộ checklist — đã build/test/chạy server thật để xác nhận kết quả
+giống hệt làm tay:
+
+```bash
+pnpm scaffold:api-only        # xem trước sẽ đổi gì (dry run, không đổi gì)
+pnpm scaffold:api-only:apply  # thực thi thật — Cấu hình B
+
+pnpm scaffold:solo            # xem trước
+pnpm scaffold:solo:apply      # thực thi thật — Cấu hình C
+```
+
+An toàn: nếu repo đã git init và thư mục sắp bị xoá (`apps/api` hoặc
+`apps/web`) còn thay đổi chưa commit, script **từ chối chạy** thay vì
+xoá mất việc đang làm dở — commit hoặc stash trước.
+
+Phần checklist tay bên dưới vẫn giữ lại để bạn hiểu **script thực chất
+làm gì** — không phải hộp đen.
+
 ---
 
 ## Cấu hình A — Web + API (mặc định của repo, không cần sửa gì)

@@ -1,0 +1,9 @@
+{
+  "extends": "@repo/tsconfig/library.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "exclude": ["src/**/*.test.ts", "dist", "node_modules"],
+  "include": ["src"]
+}

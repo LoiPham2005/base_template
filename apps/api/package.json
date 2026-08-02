@@ -1,0 +1,34 @@
+{
+  "name": "api",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "nest start --watch",
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "lint": "eslint \"src/**/*.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@repo/core": "workspace:*",
+    "@repo/contracts": "workspace:*",
+    "@nestjs/common": "^10.4.15",
+    "@nestjs/core": "^10.4.15",
+    "@nestjs/platform-fastify": "^10.4.15",
+    "@fastify/static": "^7.0.4",
+    "@nestjs/swagger": "^8.1.0",
+    "@nestjs/jwt": "^10.2.0",
+    "nestjs-zod": "^4.2.0",
+    "zod": "^3.24.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@repo/tsconfig": "workspace:*",
+    "@nestjs/cli": "^10.4.9",
+    "eslint": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

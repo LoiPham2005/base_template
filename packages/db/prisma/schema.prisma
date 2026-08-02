@@ -1,0 +1,23 @@
+// Prisma schema shared by every app. Only packages/core is allowed
+// to import the generated client (enforced by @repo/eslint-config).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // Swap to "mysql" / "sqlite" / "mongodb" here if a project needs it —
+  // nothing outside this file depends on the provider.
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}

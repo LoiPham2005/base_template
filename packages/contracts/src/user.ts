@@ -8,7 +8,9 @@ import { z } from "zod";
 
 export const createUserSchema = z.object({
   email: z.string().email(),
+  password: z.string().min(6),
   name: z.string().min(1).max(100).optional(),
+  role: z.enum(["USER", "ADMIN"]).optional(),
 });
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 
@@ -16,6 +18,7 @@ export const userSchema = z.object({
   id: z.string(),
   email: z.string().email(),
   name: z.string().nullable(),
+  role: z.enum(["USER", "ADMIN"]),
   // coerce: apps/api serializes this as an ISO string over JSON, while
   // packages/core (Prisma) hands back a real Date — this schema is used
   // to parse both.

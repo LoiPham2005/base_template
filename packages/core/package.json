@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@repo/db": "workspace:*",
-    "@repo/contracts": "workspace:*"
+    "@repo/contracts": "workspace:*",
+    "argon2": "^0.41.1"
   },
   "devDependencies": {
     "@repo/tsconfig": "workspace:*",

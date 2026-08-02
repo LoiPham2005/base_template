@@ -12,21 +12,21 @@
   "dependencies": {
     "@repo/core": "workspace:*",
     "@repo/contracts": "workspace:*",
-    "@nestjs/common": "^10.4.15",
-    "@nestjs/core": "^10.4.15",
-    "@nestjs/platform-fastify": "^10.4.15",
-    "@fastify/static": "^7.0.4",
-    "@nestjs/swagger": "^8.1.0",
-    "@nestjs/jwt": "^10.2.0",
-    "nestjs-zod": "^4.2.0",
-    "zod": "^3.24.1",
+    "@nestjs/common": "^11.1.28",
+    "@nestjs/core": "^11.1.28",
+    "@nestjs/platform-fastify": "^11.1.28",
+    "@fastify/static": "^9.3.0",
+    "@nestjs/swagger": "^11.4.6",
+    "@nestjs/jwt": "^11.0.2",
+    "nestjs-zod": "^5.5.0",
+    "zod": "^3.25.76",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
     "@repo/tsconfig": "workspace:*",
-    "@nestjs/cli": "^10.4.9",
+    "@nestjs/cli": "^11.0.24",
     "eslint": "^9.17.0",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"

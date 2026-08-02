@@ -6,7 +6,7 @@ Khung dùng chung cho mọi dự án. Có 3 cách dùng repo này tuỳ quy mô 
 
 ```
 apps/
-  web/            Next.js 15 (App Router) — BFF mỏng, KHÔNG chứa business logic
+  web/            Next.js 16 (App Router, Turbopack) — BFF mỏng, KHÔNG chứa business logic
   api/            NestJS — chứa toàn bộ business logic + REST cho web/mobile/3rd-party
 packages/
   core/           Business logic thuần (không phụ thuộc framework), CHỈ apps/api dùng

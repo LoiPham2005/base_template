@@ -18,58 +18,11 @@ packages/
 ## Chọn cấu hình theo quy mô dự án
 
 Đừng chạy cả `apps/web` + `apps/api` nếu dự án không cần — đó là
-over-engineering. 3 cấu hình hợp lệ:
+over-engineering. Xem **[CONFIGURATIONS.md](./CONFIGURATIONS.md)** để
+biết bảng quyết định và checklist xoá/sửa file cụ thể cho từng cấu
+hình (Web+API mặc định / chỉ API / chỉ Next.js+Prisma).
 
-### 1. Chỉ cần API (mobile/đối tác gọi, không có web trong repo này)
-
-Xoá `apps/web`. `apps/api` tự đứng độc lập với `packages/core|db|contracts`,
-không cần sửa gì thêm.
-
-### 2. Web đơn lẻ, CHẮC CHẮN không bao giờ cần app khác gọi vào (blog, landing
-page, tool nội bộ 1 người dùng)
-
-Đây là trường hợp Next.js + Prisma cổ điển — không cần NestJS. Xoá
-`apps/api`, rồi cho `apps/web` gọi thẳng `packages/core` trong cùng
-process (nhanh hơn, ít 1 service phải chạy/deploy):
-
-```bash
-# 1. Xoá apps/api (không cần nữa)
-rm -rf apps/api
-
-# 2. apps/web/package.json — thêm lại 2 dependency
-#    "@repo/core": "workspace:*"
-#    "@repo/db": "workspace:*"
-
-# 3. apps/web/next.config.mjs — transpilePackages thêm "@repo/core"
-
-# 4. apps/web/eslint.config.js — đổi base.webMustUseApi thành
-#    base.noDirectDbImport (chỉ chặn @repo/db, KHÔNG chặn @repo/core
-#    nữa, vì giờ web chính là nơi gọi core)
-
-# 5. apps/web/.env — đổi API_URL thành DATABASE_URL
-
-# 6. Xoá apps/web/lib/api.ts (không cần nữa, tránh để lại code chết)
-rm -f apps/web/lib/api.ts
-```
-
-Trong Server Component/Server Action, thay `apiFetch("/users")` bằng
-gọi thẳng `core.user.list()` / `core.user.create(...)` (import từ
-`@repo/core`). Cấu hình này đã được build, typecheck, test, lint, và
-chạy `next start` thật (server log xác nhận gọi thẳng
-`prisma.user.findMany()` trong process, không qua HTTP) — không phải
-hướng dẫn suông, đã kiểm chứng lại từng bước một trong một bản copy
-riêng trước khi ghi vào đây.
-
-**Đừng chọn nhánh này chỉ vì muốn nhanh gọn lúc đầu rồi hy vọng thêm
-mobile sau** — nếu có bất kỳ khả năng nào cần app/client thứ 2 trong
-tương lai gần, dùng cấu hình 3 ngay từ đầu để đỡ phải chuyển đổi.
-
-### 3. Web + API (+ mobile sau này) — mặc định của repo này
-
-Không cần sửa gì — đây là cấu hình đang có sẵn, dùng khi dự án có (hoặc
-sẽ sớm có) hơn 1 client: web, mobile, đối tác thứ 3.
-
-## Vì sao web KHÔNG gọi thẳng Prisma/core (cấu hình mặc định, mục 3)
+## Vì sao web KHÔNG gọi thẳng Prisma/core (cấu hình mặc định)
 
 ```
 Web (Next.js)  ──HTTP──▶  API (NestJS)  ──▶  packages/core ──▶ Prisma ──▶ DB
@@ -184,7 +137,38 @@ pnpm build          # build cả web (apps/web/.next) và api (apps/api/dist)
 
 - `apps/web` → deploy Vercel (hoặc `next start` sau build). Chỉ cần biết
   `API_URL` của `apps/api`, không cần biết `DATABASE_URL`.
-- `apps/api` → build Docker image chạy `node dist/main.js`, deploy
-  Railway/Fly/VPS. Đây là nơi duy nhất giữ `DATABASE_URL`.
 - Mobile (Flutter/React Native) trỏ thẳng vào `apps/api`, dùng Swagger
   doc tại `/docs` để sinh client hoặc tham chiếu contract.
+
+`apps/api` là nơi duy nhất giữ `DATABASE_URL`, deploy được bằng **cả 3
+cách** dưới đây — chọn theo hạ tầng đang có, không cần chọn trước:
+
+### A. Docker / Railway
+
+```bash
+docker build -f apps/api/Dockerfile -t my-api .
+docker run -p 3001:3001 -e DATABASE_URL="..." my-api
+```
+
+`apps/api/Dockerfile` đã build+chạy thật để xác nhận (multi-stage,
+dùng `turbo prune` nên image chỉ chứa đúng thứ `apps/api` cần —
+`packages/core|db|contracts`, không kéo theo `apps/web`). Railway đọc
+Dockerfile này trực tiếp, không cần thêm cấu hình gì khác.
+
+### B. VPS tay (PM2)
+
+```bash
+pnpm install --prod=false && pnpm --filter api... build
+cd apps/api
+pm2 start ecosystem.config.js       # lần đầu
+pm2 reload ecosystem.config.js      # sau khi build lại, zero-downtime
+```
+
+`apps/api/ecosystem.config.js` mặc định `instances: 1` (1 connection
+pool Postgres) — chỉ tăng lên cluster mode nếu `DATABASE_URL` đã cấu
+hình connection limit phù hợp.
+
+### C. Fly.io
+
+Dùng chung `apps/api/Dockerfile` — Fly đọc Dockerfile giống Railway,
+chỉ cần `fly launch --dockerfile apps/api/Dockerfile`.

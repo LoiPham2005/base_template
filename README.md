@@ -158,17 +158,43 @@ Dockerfile này trực tiếp, không cần thêm cấu hình gì khác.
 ### B. VPS tay (PM2)
 
 ```bash
-pnpm install --prod=false && pnpm --filter api... build
-cd apps/api
-pm2 start ecosystem.config.js       # lần đầu
-pm2 reload ecosystem.config.js      # sau khi build lại, zero-downtime
+pnpm build
+cd apps/api && pm2 start ecosystem.config.js   # lần đầu
+cd apps/web && pm2 start ecosystem.config.js   # nếu web cũng self-host trên VPS này
+pm2 reload ecosystem.config.js                  # sau khi build lại, zero-downtime
 ```
 
-`apps/api/ecosystem.config.js` mặc định `instances: 1` (1 connection
-pool Postgres) — chỉ tăng lên cluster mode nếu `DATABASE_URL` đã cấu
-hình connection limit phù hợp.
+`ecosystem.config.js` (trong mỗi app) mặc định `instances: 1` (1
+connection pool Postgres cho api) — chỉ tăng cluster mode nếu
+`DATABASE_URL` đã cấu hình connection limit phù hợp.
+
+PM2 chỉ giữ process Node sống — cần thêm 1 lớp public-facing HTTPS/reverse
+proxy trước nó. Repo có sẵn `Caddyfile` ở root cho việc này (adapt từ
+Caddyfile thật của sports_booking, chỉ đổi domain Docker service thành
+`localhost` vì đây là VPS trần, không phải container):
+
+```bash
+# sửa 2 domain placeholder trong Caddyfile trước, trỏ DNS về IP server này
+sudo caddy run --config Caddyfile
+```
+
+Caddy tự lấy/renew chứng chỉ Let's Encrypt cho domain đã khai — không
+cần cấu hình HTTPS tay. **Lưu ý:** cú pháp Caddyfile này copy gần như
+nguyên vẹn từ sports_booking (chỉ đổi `frontend:3000`/`app:3001` →
+`localhost:3000`/`localhost:3001`) nhưng chưa chạy `caddy validate` được
+trong môi trường dựng base này (thiếu quyền admin để cài Caddy CLI) —
+nên tự chạy `caddy validate --config Caddyfile` trước khi deploy thật.
 
 ### C. Fly.io
 
 Dùng chung `apps/api/Dockerfile` — Fly đọc Dockerfile giống Railway,
 chỉ cần `fly launch --dockerfile apps/api/Dockerfile`.
+
+## Git hooks (Husky)
+
+`pnpm install` tự cấu hình pre-commit hook (qua script `prepare`) —
+mỗi lần commit, `lint-staged` tự chạy `prettier --write` trên đúng các
+file đang stage (không phải toàn repo). Đã test thật: commit 1 file cố
+tình format sai → hook tự sửa lại đúng chuẩn trước khi commit hoàn tất,
+không cần làm gì thêm. Cấu hình tại `.husky/pre-commit` +
+`lint-staged` trong `package.json` root.

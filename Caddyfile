@@ -1,0 +1,64 @@
+# Caddy 2 reverse proxy for the "VPS tay (PM2)" deploy path in
+# CONFIGURATIONS.md. Not needed for Docker/Railway/Fly — those platforms
+# already terminate HTTPS and route traffic themselves.
+#
+# Adapted from sports_booking's proven Caddyfile — same headers/pattern,
+# but pointing at localhost ports since PM2 runs apps/web and apps/api
+# as bare Node processes on this same machine, not Docker containers.
+#
+# Replace the two domains below with your real ones before deploy.
+# Caddy automatically obtains + renews Let's Encrypt certs for them —
+# both domains must already point (DNS A/AAAA record) at this server's
+# public IP before starting Caddy, or cert issuance will fail.
+
+{
+    # Global options — email used by ACME for cert expiry notifications
+    email admin@example.com
+}
+
+app.example.com {
+    encode gzip zstd
+
+    reverse_proxy localhost:3000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
+
+api.example.com {
+    encode gzip zstd
+
+    # X-Forwarded-* — NestJS reads these if you enable `trust proxy`
+    # equivalent on the Fastify adapter (app.setTrustProxy? — see
+    # https://docs.nestjs.com/faq/global-prefix for the Fastify-specific option).
+    reverse_proxy localhost:3001 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}

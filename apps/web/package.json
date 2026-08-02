@@ -10,7 +10,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@repo/core": "workspace:*",
     "@repo/contracts": "workspace:*",
     "next": "^15.1.3",
     "react": "^19.0.0",

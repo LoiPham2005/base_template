@@ -1,14 +1,19 @@
-import { core } from "@repo/core";
+import { z } from "zod";
+import { userSchema } from "@repo/contracts";
+import { apiFetch } from "@/lib/api";
 import { UserForm } from "./user-form";
 
 // Mutable, per-request data — never statically prerendered at build time.
 export const dynamic = "force-dynamic";
 
-// Server Component — fetches through the core service in-process,
-// rendered on the server, streamed to the client. No client-side
-// fetch(), no API round trip.
+const usersResponseSchema = z.array(userSchema);
+
+// Server Component — calls apps/api over HTTP, the same REST endpoint
+// the mobile app hits. Still server-rendered/streamed; the network hop
+// stays inside the datacenter, not the user's browser.
 export default async function UsersPage() {
-  const users = await core.user.list();
+  const raw = await apiFetch<unknown>("/users");
+  const users = usersResponseSchema.parse(raw);
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>

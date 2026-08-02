@@ -28,9 +28,8 @@ module.exports = [
 ];
 
 /**
- * Apply in apps/* (web, api) — never in packages/core.
- * Keeps Prisma access confined to the core layer so business logic
- * doesn't fork between the Next.js and NestJS entry points.
+ * Apply in apps/api only. Keeps Prisma access confined to the core
+ * layer so business logic doesn't fork between modules.
  */
 module.exports.noDirectDbImport = {
   rules: {
@@ -42,6 +41,30 @@ module.exports.noDirectDbImport = {
             group: ["@repo/db", "@repo/db/*"],
             message:
               "Only @repo/core may import @repo/db directly. Call a core service instead.",
+          },
+        ],
+      },
+    ],
+  },
+};
+
+/**
+ * Apply in apps/web only. Web is a thin BFF: it talks to apps/api over
+ * HTTP (same as the mobile app), never imports business logic or the
+ * DB in-process. This keeps all three clients (web, mobile, 3rd party)
+ * behaviorally identical — matches the pattern used across every real
+ * project in this workspace (deploybox, sports_booking, dat_san_247, …).
+ */
+module.exports.webMustUseApi = {
+  rules: {
+    "no-restricted-imports": [
+      "error",
+      {
+        patterns: [
+          {
+            group: ["@repo/core", "@repo/core/*", "@repo/db", "@repo/db/*"],
+            message:
+              "apps/web must not import business logic or the DB directly — call apps/api over HTTP instead, the same way the mobile app does.",
           },
         ],
       },

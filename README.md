@@ -47,12 +47,18 @@ rm -rf apps/api
 #    nữa, vì giờ web chính là nơi gọi core)
 
 # 5. apps/web/.env — đổi API_URL thành DATABASE_URL
+
+# 6. Xoá apps/web/lib/api.ts (không cần nữa, tránh để lại code chết)
+rm -f apps/web/lib/api.ts
 ```
 
 Trong Server Component/Server Action, thay `apiFetch("/users")` bằng
 gọi thẳng `core.user.list()` / `core.user.create(...)` (import từ
-`@repo/core`). Cấu hình này đã được build/test/chạy thật và xác nhận
-hoạt động đúng trong lúc dựng template — không phải hướng dẫn suông.
+`@repo/core`). Cấu hình này đã được build, typecheck, test, lint, và
+chạy `next start` thật (server log xác nhận gọi thẳng
+`prisma.user.findMany()` trong process, không qua HTTP) — không phải
+hướng dẫn suông, đã kiểm chứng lại từng bước một trong một bản copy
+riêng trước khi ghi vào đây.
 
 **Đừng chọn nhánh này chỉ vì muốn nhanh gọn lúc đầu rồi hy vọng thêm
 mobile sau** — nếu có bất kỳ khả năng nào cần app/client thứ 2 trong

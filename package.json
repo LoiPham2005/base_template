@@ -21,7 +21,9 @@
     "scaffold:api-only": "node scripts/scaffold.js api-only",
     "scaffold:api-only:apply": "node scripts/scaffold.js api-only --yes",
     "scaffold:solo": "node scripts/scaffold.js solo",
-    "scaffold:solo:apply": "node scripts/scaffold.js solo --yes"
+    "scaffold:solo:apply": "node scripts/scaffold.js solo --yes",
+    "deploy:vps": "bash deploy-vps.sh",
+    "deploy:docker": "bash deploy-docker.sh"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

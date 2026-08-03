@@ -12,7 +12,9 @@
 # public IP before starting Caddy, or cert issuance will fail.
 
 {
-    # Global options — email used by ACME for cert expiry notifications
+    # Email nhận cảnh báo hết hạn chứng chỉ từ Let's Encrypt.
+    # PHẢI đổi thành email thật trước khi deploy — địa chỉ example.com dưới đây
+    # không tồn tại, nên bạn sẽ không nhận được cảnh báo nào nếu ACME có vấn đề.
     email admin@example.com
 }
 
@@ -41,9 +43,12 @@ app.example.com {
 api.example.com {
     encode gzip zstd
 
-    # X-Forwarded-* — NestJS reads these if you enable `trust proxy`
-    # equivalent on the Fastify adapter (app.setTrustProxy? — see
-    # https://docs.nestjs.com/faq/global-prefix for the Fastify-specific option).
+    # header_up với một giá trị là GHI ĐÈ, không phải nối thêm — đây là điểm
+    # then chốt. Mặc định Caddy nối IP client vào X-Forwarded-For có sẵn, nên
+    # client tự gửi header giả là qua mặt được rate limit. {remote_host} là IP
+    # thật Caddy thấy ở tầng TCP.
+    #
+    # Phía NestJS đã bật `trustProxy: true` trên FastifyAdapter để đọc header này.
     reverse_proxy localhost:3001 {
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-For {remote_host}

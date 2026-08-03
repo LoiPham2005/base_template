@@ -169,9 +169,15 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../config/eslint-config
       '@repo/tsconfig':
         specifier: workspace:*
         version: link:../config/tsconfig
+      eslint:
+        specifier: ^9.17.0
+        version: 9.39.5(jiti@2.7.0)
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
@@ -188,9 +194,15 @@ importers:
         specifier: ^0.41.1
         version: 0.41.1
     devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../config/eslint-config
       '@repo/tsconfig':
         specifier: workspace:*
         version: link:../config/tsconfig
+      eslint:
+        specifier: ^9.17.0
+        version: 9.39.5(jiti@2.7.0)
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
@@ -207,6 +219,9 @@ importers:
         specifier: ^17.4.2
         version: 17.4.2
     devDependencies:
+      '@repo/eslint-config':
+        specifier: workspace:*
+        version: link:../config/eslint-config
       '@repo/tsconfig':
         specifier: workspace:*
         version: link:../config/tsconfig
@@ -216,6 +231,9 @@ importers:
       argon2:
         specifier: ^0.41.1
         version: 0.41.1
+      eslint:
+        specifier: ^9.17.0
+        version: 9.39.5(jiti@2.7.0)
       prisma:
         specifier: ^6.1.0
         version: 6.19.3(typescript@5.9.3)

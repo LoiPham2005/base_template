@@ -13,8 +13,8 @@ build
 .env.local
 .env.*.local
 
-# prisma
-packages/db/prisma/dev.db
+# test
+coverage
 
 # logs
 *.log

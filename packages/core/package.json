@@ -8,7 +8,8 @@
     "build": "tsc",
     "dev": "tsc --watch --preserveWatchOutput",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\" --max-warnings 0"
   },
   "dependencies": {
     "@repo/db": "workspace:*",
@@ -16,7 +17,9 @@
     "argon2": "^0.41.1"
   },
   "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
     "@repo/tsconfig": "workspace:*",
+    "eslint": "^9.17.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

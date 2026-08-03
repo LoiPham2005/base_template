@@ -10,7 +10,21 @@ import { env, isProduction } from "./env";
 async function bootstrap() {
   const logger = new Logger("Bootstrap");
 
-  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
+  const app = await NestFactory.create<NestFastifyApplication>(
+    AppModule,
+    new FastifyAdapter({
+      // BẮT BUỘC khi chạy sau reverse proxy (Caddy/nginx/Railway).
+      //
+      // ThrottlerGuard giới hạn tần suất theo IP. Không bật trustProxy thì
+      // Fastify lấy IP của chính proxy cho MỌI request — tức là toàn bộ người
+      // dùng chung một bộ đếm, và một người spam là khoá luôn tất cả những
+      // người còn lại. Bật lên thì Fastify đọc X-Forwarded-For do proxy đặt.
+      //
+      // An toàn vì Caddyfile GHI ĐÈ X-Forwarded-For bằng {remote_host} thay vì
+      // nối thêm — client không tự khai man IP được.
+      trustProxy: true,
+    }),
+  );
 
   await app.register(helmet, {
     // API trả JSON, không render HTML, nên CSP ở đây không có tác dụng gì.

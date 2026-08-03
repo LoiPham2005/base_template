@@ -20,7 +20,19 @@ module.exports = [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
-      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+      // Prefix `_` = cố ý không dùng. Cần cả bốn tuỳ chọn, không chỉ args:
+      // `const { password: _password, ...rest } = user` là cách chuẩn để loại
+      // một field ra khỏi object, và nếu thiếu ignoreRestSiblings/varsIgnorePattern
+      // thì mọi lần làm vậy đều bị cảnh báo.
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          ignoreRestSiblings: true,
+        },
+      ],
       "@typescript-eslint/no-explicit-any": "warn",
     },
   },
@@ -39,8 +51,7 @@ module.exports.noDirectDbImport = {
         patterns: [
           {
             group: ["@repo/db", "@repo/db/*"],
-            message:
-              "Only @repo/core may import @repo/db directly. Call a core service instead.",
+            message: "Only @repo/core may import @repo/db directly. Call a core service instead.",
           },
         ],
       },

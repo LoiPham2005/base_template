@@ -1,6 +1,7 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { FastifyRequest } from "fastify";
+import type { CurrentUserPayload } from "./current-user.decorator";
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -15,8 +16,8 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      const payload = await this.jwtService.verifyAsync(token);
-      (request as any).user = payload;
+      const payload = await this.jwtService.verifyAsync<CurrentUserPayload>(token);
+      (request as FastifyRequest & { user?: CurrentUserPayload }).user = payload;
     } catch {
       throw new UnauthorizedException("Access Token không hợp lệ hoặc đã hết hạn");
     }

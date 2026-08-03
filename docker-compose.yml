@@ -1,16 +1,19 @@
-version: "3.8"
+# `version:` đã bị Compose v2 bỏ và chỉ sinh cảnh báo nếu còn giữ.
+
+x-database-url: &database-url
+  DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-base_template}?schema=public}
 
 services:
   postgres:
     image: postgres:16-alpine
     container_name: base_template_db
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-base_template}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,38 +21,84 @@ services:
         ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-base_template}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  # Chạy một lần rồi thoát; `api` đợi nó kết thúc thành công.
+  # Trước đây KHÔNG có service này: schema không bao giờ được áp, nên database
+  # rỗng vĩnh viễn và mọi query đều lỗi ngay từ request đầu tiên.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: installer
+    container_name: base_template_migrate
+    restart: "no"
+    working_dir: /app/packages/db
+    command: ["pnpm", "exec", "prisma", "migrate", "deploy"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *database-url
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     container_name: base_template_api
-    restart: always
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
     environment:
+      <<: *database-url
       NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/base_template?schema=public}
       PORT: 3001
-    ports:
-      - "3001:3001"
+      # BẮT BUỘC. Không có giá trị mặc định là chủ ý: thiếu thì container dừng
+      # ngay kèm thông báo rõ ràng. Bản trước không truyền biến này xuống, nên
+      # API âm thầm ký JWT bằng khoá mặc định nằm công khai trong mã nguồn.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET là bắt buộc — sinh bằng openssl rand -base64 48}
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN là bắt buộc trên production}
+    # Cố ý KHÔNG publish cổng 3001 ra ngoài: chỉ `web` và reverse proxy cần
+    # gọi API. Mở ra Internet là đi vòng qua cả TLS lẫn rate limit của proxy.
+    expose:
+      - "3001"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
 
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
     container_name: base_template_web
-    restart: always
+    restart: unless-stopped
     environment:
       NODE_ENV: production
       API_URL: ${API_URL:-http://api:3001}
       PORT: 3000
     ports:
-      - "3000:3000"
+      - "${WEB_PORT:-3000}:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:

@@ -10,29 +10,30 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@repo/core": "workspace:*",
-    "@repo/contracts": "workspace:*",
+    "@fastify/helmet": "^13.0.1",
+    "@fastify/static": "^9.3.0",
     "@nestjs/common": "^11.1.28",
     "@nestjs/core": "^11.1.28",
-    "@nestjs/platform-fastify": "^11.1.28",
-    "@fastify/static": "^9.3.0",
-    "@nestjs/swagger": "^11.4.6",
     "@nestjs/jwt": "^11.0.2",
-    "@nestjs/throttler": "^6.3.0",
+    "@nestjs/platform-fastify": "^11.1.28",
+    "@nestjs/swagger": "^11.4.6",
     "@nestjs/terminus": "^11.0.0",
-    "@fastify/helmet": "^13.0.1",
+    "@nestjs/throttler": "^6.3.0",
+    "@repo/contracts": "workspace:*",
+    "@repo/core": "workspace:*",
+    "dotenv": "^17.4.2",
     "fastify": "^5.2.1",
     "nestjs-zod": "^5.5.0",
-    "zod": "^3.25.76",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@nestjs/cli": "^11.0.24",
     "@repo/eslint-config": "workspace:*",
     "@repo/tsconfig": "workspace:*",
-    "@nestjs/cli": "^11.0.24",
-    "eslint": "^9.17.0",
     "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
     "typescript": "^5.7.2"
   }
 }

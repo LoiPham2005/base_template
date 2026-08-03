@@ -1,37 +1,57 @@
 import "reflect-metadata";
+import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { FastifyAdapter, NestFastifyApplication } from "@nestjs/platform-fastify";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import helmet from "@fastify/helmet";
 import { AppModule } from "./app.module";
-import { env } from "./env";
+import { env, isProduction } from "./env";
 
 async function bootstrap() {
+  const logger = new Logger("Bootstrap");
+
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
 
   await app.register(helmet, {
+    // API trả JSON, không render HTML, nên CSP ở đây không có tác dụng gì.
+    // Header CSP thuộc về phía web (apps/web).
     contentSecurityPolicy: false,
   });
 
   app.enableCors({
-    origin: env.CORS_ORIGIN === "*" ? true : env.CORS_ORIGIN.split(","),
-    credentials: true,
+    // `*` chỉ tới được đây khi không phải production — env.ts chặn từ đầu.
+    // Wildcard + credentials là cấu hình mâu thuẫn nên phải tắt credentials
+    // cùng lúc, thay vì để trình duyệt âm thầm từ chối request.
+    origin: env.CORS_ORIGIN === "*" ? true : env.CORS_ORIGIN.split(",").map((o) => o.trim()),
+    credentials: env.CORS_ORIGIN !== "*",
   });
 
-  const config = new DocumentBuilder()
-    .setTitle("Base Template API")
-    .setDescription("Production-Ready REST API for Web & Mobile Clients")
-    .setVersion("1.0")
-    .addBearerAuth()
-    .build();
+  // Swagger mặc định TẮT trên production. Một trang /docs công khai liệt kê
+  // sẵn mọi endpoint, mọi tham số và mọi mã lỗi — tiện cho người dò hệ thống
+  // hơn là cho bạn.
+  if (env.ENABLE_SWAGGER && !isProduction) {
+    const config = new DocumentBuilder()
+      .setTitle("Base Template API")
+      .setDescription("REST API dùng chung cho web và mobile")
+      .setVersion("1.0")
+      .addBearerAuth()
+      .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup("docs", app, document);
+    SwaggerModule.setup("docs", app, SwaggerModule.createDocument(app, config));
+    logger.log(`Swagger bật tại http://localhost:${env.PORT}/docs`);
+  }
+
+  // Đóng kết nối database và cho request đang chạy hoàn tất trước khi thoát;
+  // không có dòng này thì container bị dừng sẽ cắt ngang giữa chừng.
+  app.enableShutdownHooks();
 
   await app.listen(env.PORT, "0.0.0.0");
-  console.log(
-    `🚀 API Server running on http://localhost:${env.PORT} (Docs at http://localhost:${env.PORT}/docs)`,
-  );
+  logger.log(`API chạy tại http://localhost:${env.PORT} (NODE_ENV=${env.NODE_ENV})`);
 }
 
-bootstrap();
+// Không có .catch() thì lỗi lúc khởi động thành unhandled rejection: tiến trình
+// vẫn thoát nhưng exit code là 0, và trình quản lý tiến trình tưởng mọi thứ ổn.
+bootstrap().catch((error: unknown) => {
+  new Logger("Bootstrap").error("Không khởi động được API", error);
+  process.exit(1);
+});

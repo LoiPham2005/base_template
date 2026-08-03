@@ -10,7 +10,10 @@ import { env } from "../env";
   imports: [
     JwtModule.register({
       secret: env.JWT_SECRET,
-      signOptions: { expiresIn: env.JWT_EXPIRES_IN as any },
+      // JWT_EXPIRES_IN là chuỗi tự do ("7d", "15m"); kiểu của @nestjs/jwt là
+      // union hẹp nên phải khẳng định kiểu. Dùng ép kiểu có tên thay vì `any`
+      // để không vô tình tắt kiểm tra cho cả object.
+      signOptions: { expiresIn: env.JWT_EXPIRES_IN as `${number}${"s" | "m" | "h" | "d"}` },
     }),
   ],
   controllers: [AuthController],

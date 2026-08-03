@@ -20,12 +20,18 @@ enum Role {
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
-  password  String   @default("")
+  /// Argon2 hash. Null nghĩa là tài khoản chưa đặt mật khẩu (admin tạo hộ,
+  /// hoặc đăng nhập qua OAuth) — khác hẳn chuỗi rỗng, vốn là một mật khẩu
+  /// "hợp lệ" nhìn từ tầng dữ liệu.
+  password  String?
   name      String?
   role      Role     @default(USER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Danh sách sắp xếp theo createdAt desc; không có index thì mỗi lần mở
+  // trang là một lần full table scan kèm sort.
+  @@index([createdAt])
   @@map("users")
 }
 

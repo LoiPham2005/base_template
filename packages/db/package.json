@@ -18,14 +18,15 @@
     "seed": "npx tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.1.0"
+    "@prisma/client": "^6.1.0",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
     "@repo/tsconfig": "workspace:*",
     "@types/node": "^22.10.2",
+    "argon2": "^0.41.1",
     "prisma": "^6.1.0",
     "tsx": "^4.19.2",
-    "argon2": "^0.41.1",
     "typescript": "^5.7.2"
   }
 }

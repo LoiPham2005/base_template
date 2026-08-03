@@ -4,7 +4,7 @@
 # plain Docker host. Uses `turbo prune` so the final image only carries
 # what apps/api actually depends on (packages/core, db, contracts).
 
-FROM node:20-alpine AS base
+FROM node:22-alpine AS base
 # libssl: Prisma's query engine needs it on Alpine, otherwise it fails
 # at runtime with "Unable to require libquery_engine".
 RUN apk add --no-cache libc6-compat openssl

@@ -30,6 +30,8 @@ packages/
 - Xác thực email, quên/đặt lại/đổi mật khẩu (kèm email thông báo đã đổi)
 - Khoá tạm khi sai mật khẩu liên tiếp + rate limit theo IP trên Redis
 - Argon2id (một thuật toán duy nhất), tự băm lại khi bạn siết tham số
+- **Passkey / WebAuthn**: vân tay · Face ID · Windows Hello · khoá cứng. Đăng
+  nhập **không cần nhập email**, chống phishing tuyệt đối
 - **2FA (TOTP)**: Google Authenticator/Authy/1Password, mã khôi phục, bí mật
   mã hoá AES-256-GCM trong database
 - **Đổi email an toàn**: xác thực địa chỉ mới + cảnh báo địa chỉ cũ
@@ -209,6 +211,38 @@ trong mã nguồn.
 | Upload bằng presigned URL                                    | API không phải nới `bodyLimit` cho mọi endpoint                          |
 | `CORS_ORIGIN=*` bị chặn trên production                      | Wildcard + credentials là cấu hình mâu thuẫn                             |
 | `JWT_SECRET` không có giá trị mặc định                       | Thà không khởi động được, còn hơn ký bằng khoá ai cũng biết              |
+
+---
+
+## API sập thì web có sập theo không
+
+Không. Đã có ba lớp, và chúng được kiểm bằng test thật:
+
+1. **`apiFetch` có timeout 10 giây** và phân biệt hai loại hỏng: `ApiError`
+   (API ĐÃ trả lời — 401, 422…) với `ApiUnavailableError` (không ai trả lời).
+   Không có timeout thì API _treo_ còn nguy hiểm hơn API _chết_: request web
+   tích tụ cho tới khi hết luồng.
+2. **`app/error.tsx`** biến sự cố backend thành một trang đọc được kèm nút thử
+   lại, thay vì dòng "Application error" trần của Next.js.
+3. **`middleware.ts` fail-safe**: không gia hạn được token thì đưa về trang
+   đăng nhập, không ném lỗi.
+
+Trang tĩnh (`/`) vẫn phục vụ bình thường. Muốn thấy tận mắt:
+
+```bash
+make dev-web          # chạy web mà KHÔNG chạy api
+open http://localhost:3000/users
+```
+
+## Giao diện
+
+Tailwind CSS v4, cấu hình ngay trong `apps/web/app/globals.css` bằng `@theme`
+(v4 không còn `tailwind.config.js`). Đổi màu thương hiệu ở đó là đổi cho toàn
+bộ ứng dụng.
+
+**Chỉ dùng Tailwind** — không trộn với `style={{}}` nội tuyến. Ngoại lệ duy
+nhất là `app/global-error.tsx`: nó chạy khi chính layout hỏng, nên không được
+phép phụ thuộc vào CSS nào.
 
 ---
 

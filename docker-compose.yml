@@ -107,6 +107,8 @@ services:
       # để hệ thống hoạt động.
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       APP_NAME: ${APP_NAME:-Base Template}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
+      WEBAUTHN_ORIGINS: ${WEBAUTHN_ORIGINS:-}
     # Cố ý KHÔNG publish cổng 3001: chỉ `web` và reverse proxy cần gọi API. Mở
     # ra Internet là đi vòng qua cả TLS lẫn rate limit của proxy.
     expose:

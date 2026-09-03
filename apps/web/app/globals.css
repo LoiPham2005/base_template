@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/*
+ * Cấu hình theme — Tailwind v4 khai bằng CSS, không còn `tailwind.config.js`.
+ *
+ * Đổi màu thương hiệu ở đây là đổi cho toàn bộ ứng dụng: `--color-brand-*` tự
+ * sinh ra `bg-brand-600`, `text-brand-700`, `border-brand-300`…
+ */
+@theme {
+  --color-brand-50: oklch(0.97 0.02 250);
+  --color-brand-100: oklch(0.93 0.04 250);
+  --color-brand-300: oklch(0.78 0.1 250);
+  --color-brand-600: oklch(0.55 0.19 250);
+  --color-brand-700: oklch(0.48 0.18 250);
+  --color-brand-900: oklch(0.32 0.12 250);
+}
+
+/*
+ * Tôn trọng chế độ tối của hệ điều hành.
+ *
+ * Chỉ đặt nền và chữ mặc định ở đây để trang không loé trắng trước khi CSS của
+ * component kịp áp; phần còn lại dùng biến thể `dark:` tại từng chỗ.
+ */
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+
+  body {
+    @apply bg-white text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+  }
+}
+
+/*
+ * Vài class gộp cho thứ lặp lại ở nhiều nơi.
+ *
+ * Giữ danh sách này NGẮN và chỉ cho thứ THUẦN TRÌNH BÀY, không mang trạng thái.
+ * Nút và ô nhập cố ý KHÔNG nằm ở đây: khi một hệ class thủ công và một hệ
+ * component cùng tồn tại, chỗ hai hệ chạm nhau là nơi đẻ ra bug giao diện.
+ */
+@layer components {
+  .card {
+    @apply rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900;
+  }
+
+  .field-error {
+    @apply mt-1 text-sm text-red-600 dark:text-red-400;
+  }
+}

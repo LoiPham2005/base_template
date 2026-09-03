@@ -24,25 +24,31 @@ export default async function ConfirmEmailChangePage({
 
   if (!token) {
     return (
-      <main style={{ padding: 24, maxWidth: 420, fontFamily: "system-ui, sans-serif" }}>
-        <h1>Liên kết không hợp lệ</h1>
-        <p>Thiếu mã xác nhận. Hãy mở lại liên kết trong email.</p>
+      <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-3 px-6">
+        <h1 className="text-xl font-semibold">Liên kết không hợp lệ</h1>
+        <p className="text-slate-600 dark:text-slate-400">
+          Thiếu mã xác nhận. Hãy mở lại liên kết trong email.
+        </p>
       </main>
     );
   }
 
   return (
-    <main style={{ padding: 24, maxWidth: 420, fontFamily: "system-ui, sans-serif" }}>
-      <h1>Xác nhận đổi địa chỉ email</h1>
-      <p>
-        Bấm nút dưới đây để hoàn tất. Sau khi đổi, <strong>mọi thiết bị sẽ bị đăng xuất</strong> —
-        email là danh tính khôi phục tài khoản, nên đổi nó xong mà để phiên cũ sống tiếp là để ngỏ
+    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-4 px-6">
+      <h1 className="text-xl font-semibold">Xác nhận đổi địa chỉ email</h1>
+      <p className="text-slate-600 dark:text-slate-400">
+        Bấm nút dưới đây để hoàn tất. Sau khi đổi,{" "}
+        <strong className="text-slate-900 dark:text-slate-100">mọi thiết bị sẽ bị đăng xuất</strong>{" "}
+        — email là danh tính khôi phục tài khoản, nên đổi nó xong mà để phiên cũ sống tiếp là để ngỏ
         đúng thứ vừa được bảo vệ.
       </p>
 
       <form action={confirmEmailChangeAction}>
         <input type="hidden" name="token" value={token} />
-        <button type="submit" style={{ padding: 10 }}>
+        <button
+          type="submit"
+          className="rounded-md bg-brand-600 px-4 py-2 font-medium text-white hover:bg-brand-700"
+        >
           Xác nhận đổi email
         </button>
       </form>

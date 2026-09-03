@@ -30,6 +30,8 @@
     "API_PUBLIC_URL",
     "APP_NAME",
     "ENCRYPTION_KEY",
+    "WEBAUTHN_RP_ID",
+    "WEBAUTHN_ORIGINS",
     "API_URL",
     "PORT",
     "REDIS_URL",

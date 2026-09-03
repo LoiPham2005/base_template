@@ -56,9 +56,13 @@ async list(@Query() query: ListOrdersDto): Promise<Paginated<Order>> {
   OTP / mã khôi phục (entropy thấp) → `hashScopedToken(userId, code)`. Dùng nhầm
   hàm cho OTP là mở đường đăng nhập nhầm tài khoản — `SHA-256("123456")` là một
   hằng số.
-- **Mọi JWT phải mang `typ`.** `JwtAuthGuard` chỉ nhận `typ: "access"`. Thêm một
-  loại token mới mà quên gắn `typ` thì nó bị từ chối (an toàn); gắn `"access"`
-  cho một token không phải access là mở cửa hậu.
+- **Mọi JWT phải mang `typ`.** `JwtAuthGuard` chỉ nhận `typ: "access"`. Hệ
+  thống ký 6 loại token bằng cùng một khoá (access · vé 2FA · state OAuth · mã
+  trao đổi OAuth · vé đăng ký passkey · vé đăng nhập passkey). Thêm loại mới mà
+  quên gắn `typ` thì nó bị từ chối (an toàn); gắn `"access"` cho một token
+  không phải access là mở cửa hậu.
+- **Passkey KHÔNG hỏi thêm 2FA.** Nó đã là hai yếu tố. Đừng "cho chắc" thêm một
+  bước — làm vậy là đẩy người dùng quay về mật khẩu, tức là làm hệ thống yếu đi.
 - **Thao tác lên người dùng phải truyền `actorId`.** Đó là thứ kích hoạt chốt
   chặn bậc quyền lực (`Role.level`). Bỏ trống = coi như hệ thống tự làm và
   KHÔNG kiểm — chỉ đúng cho seed/cron.
@@ -81,6 +85,29 @@ async list(@Query() query: ListOrdersDto): Promise<Paginated<Order>> {
   `decryptSecret`. Mật khẩu thì ngược lại — luôn BĂM, không bao giờ mã hoá.
 - **Đừng thêm "thiết bị tin cậy" cho 2FA** mà không cân nhắc kỹ: đó là một cơ
   chế bỏ qua 2FA, và bộ khung cố ý không bật sẵn một đường vòng như vậy.
+
+## Giao diện (apps/web)
+
+**Chỉ dùng Tailwind v4.** Cấu hình theme nằm trong `app/globals.css` (`@theme`),
+không có `tailwind.config.js`. Đừng thêm `style={{}}` nội tuyến — hai hệ song
+song thì chỗ chúng chạm nhau là nơi đẻ ra bug giao diện.
+
+Ngoại lệ duy nhất: `app/global-error.tsx`, chạy khi chính layout hỏng nên không
+được phép phụ thuộc CSS nào.
+
+## Web phải sống được khi API chết
+
+Ba lớp, đừng gỡ lớp nào:
+
+1. **`apiFetch` có `AbortSignal.timeout` (10s)** và ném `ApiUnavailableError`
+   riêng biệt với `ApiError`. `fetch` của Node KHÔNG có timeout mặc định — API
+   _treo_ nguy hiểm hơn API _chết_, vì request tích tụ tới khi hết luồng.
+2. **`middleware.ts` timeout 3s** — ngắn hơn hẳn, vì nó chạy trên MỌI request
+   kể cả trang tĩnh.
+3. **Trang cần dữ liệu bắt `ApiUnavailableError`** rồi render
+   `<ServiceUnavailable />` (Server Component, có HTML thật).
+   `app/error.tsx` là lưới an toàn cho trang nào quên — nhưng nó là Client
+   Component nên chỉ hiện sau khi hydrate.
 
 ## Chạy kiểm tra
 

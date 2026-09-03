@@ -80,6 +80,19 @@ type TokenPairLike = {
   refreshExpiresAt: string;
 };
 
+/**
+ * Hạn chờ khi gia hạn token.
+ *
+ * NGẮN hơn hẳn timeout của `apiFetch` (10 giây), và đó là chủ đích: middleware
+ * chạy trên MỌI request, kể cả tới trang tĩnh. API treo mà chỗ này chờ lâu thì
+ * toàn bộ website đứng im — kể cả những trang không cần dữ liệu gì.
+ *
+ * Ba giây là mức mà một nhịp gọi trong nội bộ datacenter không bao giờ chạm
+ * tới. Quá hạn thì coi như không gia hạn được: người dùng về trang đăng nhập,
+ * còn hơn cả site treo.
+ */
+const REFRESH_TIMEOUT_MS = 3_000;
+
 async function refreshSession(refreshToken: string): Promise<TokenPairLike | null> {
   try {
     const response = await fetch(
@@ -89,6 +102,10 @@ async function refreshSession(refreshToken: string): Promise<TokenPairLike | nul
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refreshToken }),
         cache: "no-store",
+        // Không có dòng này thì `fetch` của Node chờ VÔ HẠN, và một API TREO
+        // (còn sống nhưng không trả lời) sẽ kéo sập cả web — nguy hiểm hơn hẳn
+        // API chết hẳn, vốn bị từ chối kết nối ngay lập tức.
+        signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
       },
     );
 
@@ -97,8 +114,9 @@ async function refreshSession(refreshToken: string): Promise<TokenPairLike | nul
     const body = (await response.json()) as { data?: { tokens?: TokenPairLike } };
     return body.data?.tokens ?? null;
   } catch {
-    // API chưa sẵn sàng (đang deploy, mạng chập chờn). Trả `null` để người dùng
-    // về trang đăng nhập, thay vì để middleware ném lỗi và cả trang thành 500.
+    // API chưa sẵn sàng (đang deploy, mạng chập chờn, hoặc quá hạn chờ). Trả
+    // `null` để người dùng về trang đăng nhập, thay vì để middleware ném lỗi và
+    // cả trang thành 500.
     return null;
   }
 }

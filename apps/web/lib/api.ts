@@ -24,6 +24,24 @@ const API_URL = process.env.API_URL ?? "http://localhost:3001";
  */
 export const API_PREFIX = "/api/v1";
 
+/**
+ * API không phản hồi: sập, đang deploy, hoặc mạng giữa web và api đứt.
+ *
+ * Tách khỏi `ApiError` vì hai thứ khác nhau về bản chất và về cách xử lý:
+ * `ApiError` nghĩa là API ĐÃ trả lời — chỉ là trả lời "không" (401, 422…).
+ * Lỗi này nghĩa là không có ai trả lời cả.
+ *
+ * Người dùng cần thấy hai thông điệp khác nhau ("sai mật khẩu" vs "hệ thống
+ * đang bảo trì"), và bên vận hành cần phân biệt để biết cảnh báo cái gì.
+ */
+export class ApiUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super("Hệ thống đang tạm thời không phản hồi. Vui lòng thử lại sau ít phút.");
+    this.name = "ApiUnavailableError";
+    this.cause = cause;
+  }
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -43,22 +61,58 @@ type ApiEnvelope<T> =
 export type ApiFetchOptions = RequestInit & {
   /** Ghi đè token (dùng trong `middleware.ts`, nơi chưa có cookie mới). */
   token?: string | null;
+  /** Hạn chờ (ms). Xem `DEFAULT_TIMEOUT_MS`. */
+  timeoutMs?: number;
 };
 
+/**
+ * Hạn chờ mặc định cho mỗi lần gọi API.
+ *
+ * ---
+ * VÌ SAO PHẢI CÓ, VÀ VÌ SAO NÓ QUAN TRỌNG HƠN VIỆC BẮT LỖI
+ *
+ * `fetch` của Node KHÔNG có timeout mặc định. Nghĩa là khi API **treo** (còn
+ * sống nhưng không trả lời — hết connection pool, deadlock database, GC dài),
+ * request của web nằm chờ vô hạn.
+ *
+ * Đó là kịch bản tệ HƠN việc API chết hẳn: API chết thì kết nối bị từ chối
+ * ngay, còn API treo thì mọi request web cứ tích tụ, chiếm hết luồng của
+ * Next.js, và **web sập theo dù bản thân nó không có lỗi gì**.
+ *
+ * 10 giây là mức thoáng cho một nhịp gọi trong nội bộ datacenter. Endpoint nào
+ * thật sự chậm (xuất báo cáo) thì tự truyền `timeoutMs` lớn hơn.
+ */
+const DEFAULT_TIMEOUT_MS = 10_000;
+
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { token, ...init } = options;
+  const { token, timeoutMs = DEFAULT_TIMEOUT_MS, ...init } = options;
   const accessToken = token === undefined ? await getAccessToken() : token;
 
-  const response = await fetch(`${API_URL}${API_PREFIX}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      ...init.headers,
-    },
-    // Dữ liệu người dùng KHÔNG được cache dùng chung giữa các phiên.
-    cache: "no-store",
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_URL}${API_PREFIX}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...init.headers,
+      },
+      // Dữ liệu người dùng KHÔNG được cache dùng chung giữa các phiên.
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    /*
+     * Tới đây nghĩa là KHÔNG CÓ AI TRẢ LỜI — kết nối bị từ chối, DNS hỏng, hoặc
+     * quá hạn chờ. Đây KHÔNG phải lỗi 5xx (5xx thì API có trả lời, và rơi vào
+     * nhánh `!response.ok` bên dưới).
+     *
+     * Bọc lại thành một lớp riêng để trang gọi nó phân biệt được "API nói
+     * không" với "API không nói gì" — hai thứ dẫn tới hai màn hình khác nhau.
+     */
+    throw new ApiUnavailableError(error);
+  }
 
   if (response.status === 204) return undefined as T;
 

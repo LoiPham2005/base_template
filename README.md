@@ -302,6 +302,20 @@ Thành phần nào chưa cấu hình sẽ hiện `disabled` (bình thường), h
 
 ---
 
+## Bảo mật là việc phải LÀM ĐỀU, không phải trạng thái
+
+Mã nguồn không đổi một dòng, nhưng `pnpm audit --prod` có thể đỏ vào bất kỳ
+sáng nào — lỗ hổng đến từ dependency. Lần audit gần nhất tìm ra 29 cái (18
+high), gồm một lỗi fastify cho phép **giả mạo `X-Forwarded-*` khi bật
+`trustProxy`** — đúng cấu hình mà repo này dùng, tức là rate limit theo IP bị
+vô hiệu hoá.
+
+Đã vá bằng `pnpm.overrides` ở `package.json` gốc. Việc cần làm đều:
+
+```bash
+pnpm audit --prod --audit-level high    # CI đã chạy sẵn ở mỗi PR
+```
+
 ## Lệnh hay dùng
 
 ```bash

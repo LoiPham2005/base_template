@@ -115,6 +115,24 @@ Ba lớp, đừng gỡ lớp nào:
    `app/error.tsx` là lưới an toàn cho trang nào quên — nhưng nó là Client
    Component nên chỉ hiện sau khi hydrate.
 
+## `pnpm.overrides` trong package.json gốc — đừng xoá
+
+Chúng ép các dependency GIÁN TIẾP lên bản đã vá. Không có chúng, `pnpm audit
+--prod` báo 29 lỗ hổng (18 high) — trong đó có một cái đánh thẳng vào thiết kế
+của repo: **fastify cho phép giả mạo `X-Forwarded-*` khi bật `trustProxy`**, tức
+là rate limit theo IP bị vô hiệu hoá.
+
+Nguyên nhân: `@nestjs/platform-fastify` kéo `fastify` RIÊNG của nó, nên nâng
+version ở `apps/api` không tới được bản lồng bên trong. `overrides` là cách duy
+nhất.
+
+`@fastify/static` bị ép vượt peer range của NestJS (`^8 || ^9` → `>=10.1.3`) vì
+bản vá chỉ có ở 10.x. Đã kiểm thật: Swagger UI vẫn phục vụ đủ cả file tĩnh.
+
+⚠️ Sau mỗi lần nâng NestJS/Next, chạy `pnpm audit --prod` và **thử bỏ bớt
+override** — giữ một override không còn cần thiết là tự khoá mình vào một
+version cũ. CI đã có bước audit, nên nó sẽ đỏ nếu bạn để trôi.
+
 ## Chạy kiểm tra
 
 ```bash

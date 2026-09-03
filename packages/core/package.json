@@ -15,10 +15,10 @@
     "@node-rs/argon2": "^2.1.0",
     "@repo/contracts": "workspace:*",
     "@repo/db": "workspace:*",
+    "@simplewebauthn/server": "^13.2.2",
     "dotenv": "^17.4.2",
-    "zod": "^3.25.76",
     "otpauth": "^9.5.1",
-    "@simplewebauthn/server": "^13.2.2"
+    "zod": "^3.25.76"
   },
   "peerDependencies": {
     "@aws-sdk/client-s3": "^3.700.0",
@@ -53,7 +53,7 @@
     "@types/nodemailer": "^6.4.17",
     "bullmq": "^5.34.0",
     "eslint": "^9.17.0",
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^9.1.1",
     "redis": "^5.9.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

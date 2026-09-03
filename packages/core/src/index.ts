@@ -32,6 +32,7 @@ export * from "./auth/token.service";
 export * from "./auth/verification.service";
 export * from "./auth/auth.service";
 export * from "./auth/two-factor.service";
+export * from "./auth/webauthn.service";
 export * from "./auth/oauth.service";
 export * from "./auth/oauth/client";
 export * from "./auth/oauth/config";

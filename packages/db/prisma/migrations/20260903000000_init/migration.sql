@@ -127,6 +127,25 @@ CREATE TABLE "recovery_codes" (
 );
 
 -- CreateTable
+CREATE TABLE "webauthn_credentials" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "credentialId" TEXT NOT NULL,
+    "publicKey" TEXT NOT NULL,
+    "counter" BIGINT NOT NULL DEFAULT 0,
+    "deviceType" TEXT NOT NULL,
+    "backedUp" BOOLEAN NOT NULL DEFAULT false,
+    "transports" TEXT[],
+    "aaguid" TEXT,
+    "name" TEXT,
+    "lastUsedAt" TIMESTAMPTZ(3),
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ(3) NOT NULL,
+
+    CONSTRAINT "webauthn_credentials_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "oauth_accounts" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
@@ -282,6 +301,12 @@ CREATE INDEX "recovery_codes_userId_idx" ON "recovery_codes"("userId");
 CREATE UNIQUE INDEX "recovery_codes_userId_codeHash_key" ON "recovery_codes"("userId", "codeHash");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "webauthn_credentials_credentialId_key" ON "webauthn_credentials"("credentialId");
+
+-- CreateIndex
+CREATE INDEX "webauthn_credentials_userId_idx" ON "webauthn_credentials"("userId");
+
+-- CreateIndex
 CREATE INDEX "oauth_accounts_userId_idx" ON "oauth_accounts"("userId");
 
 -- CreateIndex
@@ -361,6 +386,9 @@ ALTER TABLE "user_profiles" ADD CONSTRAINT "user_profiles_userId_fkey" FOREIGN K
 
 -- AddForeignKey
 ALTER TABLE "recovery_codes" ADD CONSTRAINT "recovery_codes_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "webauthn_credentials" ADD CONSTRAINT "webauthn_credentials_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "oauth_accounts" ADD CONSTRAINT "oauth_accounts_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;

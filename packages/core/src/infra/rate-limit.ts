@@ -60,6 +60,15 @@ export const RATE_LIMITS = {
    */
   twoFactor: { limit: 10, windowSeconds: 300 },
 
+  /**
+   * Đăng nhập/đăng ký bằng passkey.
+   *
+   * Rộng hơn `login` vì passkey KHÔNG dò được (chữ ký khoá công khai, không
+   * có gì để đoán) — giới hạn ở đây chỉ để chống bơm request, không phải chống
+   * dò thông tin đăng nhập.
+   */
+  passkey: { limit: 30, windowSeconds: 300 },
+
   /** Xin link upload — chặn việc bơm rác vào kho lưu trữ. */
   upload: { limit: 60, windowSeconds: 300 },
 } as const satisfies Record<string, RateLimitOptions>;

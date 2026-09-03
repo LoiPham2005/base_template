@@ -201,3 +201,53 @@ export const confirmEmailChangeSchema = z.object({
   token: z.string().min(1, "Thiếu mã xác nhận"),
 });
 export type ConfirmEmailChangeInput = z.infer<typeof confirmEmailChangeSchema>;
+
+// ---------------------------------------------------------------------------
+// Passkey (WebAuthn)
+// ---------------------------------------------------------------------------
+
+/**
+ * Phản hồi thô từ `navigator.credentials.create()` / `.get()`.
+ *
+ * Cố ý KHÔNG mô tả lại cấu trúc bằng Zod: đặc tả WebAuthn định nghĩa nó rất
+ * chi tiết và còn đang tiến hoá, nên một bản chép tay ở đây sẽ lỗi thời và bắt
+ * đầu từ chối những trình duyệt hợp lệ. Việc kiểm tra thật do
+ * `@simplewebauthn/server` làm — nó xác minh chữ ký, origin, RP ID và
+ * challenge, tức là kiểm thứ thực sự quan trọng.
+ *
+ * Ở đây chỉ chặn "không phải object" để phần còn lại không nổ vì `undefined`.
+ */
+export const webAuthnResponseSchema = z.record(z.string(), z.unknown());
+
+export const registerPasskeySchema = z.object({
+  /** Vé chứa challenge, nhận từ bước `/register/options`. */
+  challengeToken: z.string().min(1, "Thiếu vé đăng ký"),
+  response: webAuthnResponseSchema,
+  /** Tên do người dùng đặt: "iPhone của Loi". */
+  name: z.string().trim().max(60).optional(),
+});
+export type RegisterPasskeyInput = z.infer<typeof registerPasskeySchema>;
+
+export const loginPasskeySchema = z.object({
+  challengeToken: z.string().min(1, "Thiếu vé đăng nhập"),
+  response: webAuthnResponseSchema,
+});
+export type LoginPasskeyInput = z.infer<typeof loginPasskeySchema>;
+
+export const renamePasskeySchema = z.object({
+  name: z.string().trim().min(1, "Tên không được để trống").max(60),
+});
+export type RenamePasskeyInput = z.infer<typeof renamePasskeySchema>;
+
+export const passkeySchema = z.object({
+  id: z.string(),
+  name: z.string().nullable(),
+  /** `singleDevice` = khoá cứng · `multiDevice` = passkey đồng bộ được. */
+  deviceType: z.string(),
+  /** `false` = chưa sao lưu; mất thiết bị là mất hẳn passkey này. */
+  backedUp: z.boolean(),
+  transports: z.array(z.string()),
+  lastUsedAt: z.coerce.date().nullable(),
+  createdAt: z.coerce.date(),
+});
+export type Passkey = z.infer<typeof passkeySchema>;

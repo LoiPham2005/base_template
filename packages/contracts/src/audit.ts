@@ -33,6 +33,8 @@ export const AUDIT_ACTIONS = {
   EMAIL_CHANGE_REQUESTED: "auth.email_change_requested",
   EMAIL_CHANGED: "auth.email_changed",
   TWO_FACTOR_FAILED: "auth.two_factor_failed",
+  PASSKEY_REGISTERED: "auth.passkey_registered",
+  PASSKEY_REMOVED: "auth.passkey_removed",
   TWO_FACTOR_ENABLED: "auth.two_factor_enabled",
   TWO_FACTOR_DISABLED: "auth.two_factor_disabled",
   TWO_FACTOR_RECOVERY_REGENERATED: "auth.two_factor_recovery_regenerated",

@@ -124,6 +124,33 @@ const coreEnvSchema = z.object({
    */
   ENCRYPTION_KEY: optionalString(z.string().min(16).optional()),
 
+  // --- Passkey / WebAuthn ---------------------------------------------------
+
+  /**
+   * "Relying Party ID" — TÊN MIỀN mà passkey gắn vào.
+   *
+   * Bỏ trống = lấy hostname của `APP_URL`. Đúng cho phần lớn dự án.
+   *
+   * ⚠️ Đây là thứ tạo ra khả năng chống phishing, nên nó rất khắt khe:
+   *
+   *   • Passkey đăng ký ở `app.example.com` KHÔNG dùng được ở `example.com`
+   *     nếu RP ID là `app.example.com`.
+   *   • Đặt RP ID là `example.com` thì passkey dùng được ở MỌI tên miền con —
+   *     tiện, nhưng cũng có nghĩa là một tên miền con bị chiếm sẽ xin được chữ
+   *     ký. Chỉ làm vậy khi bạn kiểm soát toàn bộ tên miền con.
+   *   • ĐỔI giá trị này sau khi đã có người đăng ký = mọi passkey cũ chết.
+   */
+  WEBAUTHN_RP_ID: optionalString(z.string().min(1).optional()),
+
+  /**
+   * Danh sách origin được chấp nhận, phân tách bằng dấu phẩy.
+   *
+   * Bỏ trống = lấy origin của `APP_URL`. Cần khai thêm khi app mobile cũng
+   * dùng passkey — Android gửi origin dạng `android:apk-key-hash:...`, iOS gửi
+   * `https://<domain>` theo Associated Domains.
+   */
+  WEBAUTHN_ORIGINS: optionalString(z.string().min(1).optional()),
+
   // --- Hạn của các loại token --------------------------------------------
 
   /**
@@ -301,6 +328,49 @@ export function appUrl(path: string): string {
  * Lùi về `APP_URL` khi chưa đặt `API_PUBLIC_URL` — xem ghi chú ở phần khai báo
  * biến để biết khi nào bắt buộc phải tách hai giá trị.
  */
+/**
+ * `rpID` và danh sách `origin` cho WebAuthn, dẫn xuất từ `APP_URL` khi không
+ * khai tường minh.
+ *
+ * Ném lỗi thay vì đoán bừa: một passkey đăng ký với `rpID` sai sẽ đăng ký
+ * THÀNH CÔNG rồi không bao giờ đăng nhập được — lỗi chỉ lộ ra ở lần thử thứ
+ * hai, trên máy người dùng.
+ */
+export function webAuthnConfig(): { rpID: string; rpName: string; origins: string[] } {
+  const explicitOrigins = env.WEBAUTHN_ORIGINS?.split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  if (env.WEBAUTHN_RP_ID && explicitOrigins?.length) {
+    return { rpID: env.WEBAUTHN_RP_ID, rpName: env.APP_NAME, origins: explicitOrigins };
+  }
+
+  if (!env.APP_URL) {
+    throw new Error(
+      "Không xác định được cấu hình passkey: đặt APP_URL, hoặc khai cả " +
+        "WEBAUTHN_RP_ID lẫn WEBAUTHN_ORIGINS.",
+    );
+  }
+
+  const appUrlParsed = new URL(env.APP_URL);
+
+  return {
+    rpID: env.WEBAUTHN_RP_ID ?? appUrlParsed.hostname,
+    rpName: env.APP_NAME,
+    origins: explicitOrigins ?? [appUrlParsed.origin],
+  };
+}
+
+/** `true` khi đủ điều kiện chạy passkey — dùng để ẩn/hiện nút trên giao diện. */
+export function isWebAuthnConfigured(): boolean {
+  try {
+    webAuthnConfig();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function apiUrl(path: string): string {
   const base = env.API_PUBLIC_URL ?? env.APP_URL;
 

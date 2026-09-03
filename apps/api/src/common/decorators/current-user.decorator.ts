@@ -17,7 +17,8 @@ import type { FastifyRequest } from "fastify";
  * thêm một loại token mới sau này thì nó bị từ chối theo mặc định, thay vì âm
  * thầm được nhận.
  */
-export type TokenType = "access" | "2fa" | "oauth_state" | "oauth_exchange";
+export type TokenType =
+  "access" | "2fa" | "oauth_state" | "oauth_exchange" | "webauthn_reg" | "webauthn_auth";
 
 /**
  * Nội dung access token, sau khi đã xác thực chữ ký.
@@ -53,6 +54,23 @@ export type CurrentUserPayload = {
 export type TwoFactorChallengePayload = {
   typ: "2fa";
   sub: string;
+};
+
+/**
+ * Vé mang `challenge` của WebAuthn.
+ *
+ * Challenge PHẢI do máy chủ sinh và PHẢI được đối chiếu ở bước xác minh —
+ * không có nó thì một phản hồi cũ phát lại được. Ký vào JWT ngắn hạn thay vì
+ * lưu database: cùng khuôn với `state` của OAuth, và không có bảng nào phải
+ * dọn.
+ *
+ * `sub` chỉ có ở luồng ĐĂNG KÝ (đã biết người dùng là ai). Luồng ĐĂNG NHẬP
+ * không có — danh tính đến từ chính passkey được chọn.
+ */
+export type WebAuthnChallengePayload = {
+  typ: "webauthn_reg" | "webauthn_auth";
+  challenge: string;
+  sub?: string;
 };
 
 export type AuthenticatedRequest = FastifyRequest & { user?: CurrentUserPayload };

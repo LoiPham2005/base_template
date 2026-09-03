@@ -256,6 +256,7 @@ model User {
   verificationTokens VerificationToken[]
   oauthAccounts      OAuthAccount[]
   recoveryCodes      RecoveryCode[]
+  passkeys           WebAuthnCredential[]
 
   devices       UserDevice[]
   notifications NotificationRecipient[]
@@ -322,6 +323,74 @@ model RecoveryCode {
   @@unique([userId, codeHash])
   @@index([userId])
   @@map("recovery_codes")
+}
+
+/// Passkey (WebAuthn) — vân tay / Face ID / Windows Hello / khoá cứng.
+///
+/// ---
+/// VÌ SAO MẠNH HƠN CẢ MẬT KHẨU LẪN TOTP
+///
+/// Khoá riêng KHÔNG BAO GIỜ rời khỏi thiết bị, và trình duyệt chỉ ký cho ĐÚNG
+/// tên miền đã đăng ký. Nghĩa là **chống phishing tuyệt đối**: một trang giả
+/// `dat-san-247.com.vn-login.xyz` không thể xin được chữ ký hợp lệ, kể cả khi
+/// người dùng bị lừa hoàn toàn và bấm mọi thứ được yêu cầu.
+///
+/// Mật khẩu và TOTP đều không có tính chất đó — người dùng gõ được vào trang
+/// thật thì cũng gõ được vào trang giả, và kẻ tấn công chuyển tiếp ngay sang
+/// trang thật trong vài giây.
+///
+/// ---
+/// MỘT PASSKEY ĐÃ LÀ HAI YẾU TỐ
+///
+/// Đăng nhập bằng passkey với `userVerification: "required"` gồm: THIẾT BỊ
+/// (khoá riêng nằm trong secure enclave) + SINH TRẮC/PIN (mở khoá secure
+/// enclave). Vì vậy hệ thống KHÔNG hỏi thêm mã TOTP sau khi passkey hợp lệ —
+/// xem `WebAuthnService.verifyAuthentication`.
+model WebAuthnCredential {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// `credentialID` do authenticator sinh, base64url. Ngẫu nhiên và duy nhất
+  /// toàn cầu, nên unique toàn cục là đúng — không cần ràng buộc theo userId.
+  credentialId String @unique
+  /// Khoá CÔNG KHAI (định dạng COSE), base64url.
+  ///
+  /// Không cần mã hoá như `twoFactorSecret`: đây là khoá công khai, biết nó
+  /// không ký được gì. Khoá riêng nằm trong thiết bị người dùng và không có
+  /// đường nào tới máy chủ.
+  publicKey    String
+
+  /// Bộ đếm chống phát lại. Authenticator tăng nó sau mỗi lần ký; mã nhận về
+  /// có counter thấp hơn giá trị đã lưu nghĩa là authenticator đã bị nhân bản.
+  ///
+  /// `BigInt` vì đặc tả WebAuthn định nghĩa nó là số nguyên KHÔNG DẤU 32 bit
+  /// (tối đa 4.294.967.295), vượt trần của `Int` (2.147.483.647). Passkey hiện
+  /// đại thường báo 0 và không dùng counter, nhưng khoá cứng thì có.
+  counter BigInt @default(0)
+
+  /// `singleDevice` = khoá cứng USB · `multiDevice` = passkey đồng bộ được.
+  deviceType String
+  /// Đã đồng bộ lên iCloud Keychain / Google Password Manager chưa. Quan
+  /// trọng khi tư vấn người dùng: khoá `singleDevice` chưa sao lưu mà mất là
+  /// mất hẳn.
+  backedUp   Boolean @default(false)
+  /// usb · nfc · ble · internal · hybrid — trình duyệt dùng để gợi ý đúng cách
+  /// kết nối ở lần đăng nhập sau.
+  transports String[]
+  /// Định danh MODEL của authenticator (YubiKey 5, iCloud Keychain…). Dùng để
+  /// hiện đúng tên/biểu tượng trong danh sách.
+  aaguid     String?
+
+  /// Tên do người dùng đặt: "iPhone của Loi", "YubiKey ở nhà".
+  name       String?
+  lastUsedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("webauthn_credentials")
 }
 
 // ============================================================

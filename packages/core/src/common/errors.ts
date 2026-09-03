@@ -320,3 +320,24 @@ export class InsufficientRoleLevelError extends DomainError {
     super(message);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Passkey (WebAuthn)
+// ---------------------------------------------------------------------------
+
+/**
+ * Phản hồi passkey không hợp lệ khi ĐĂNG KÝ.
+ *
+ * Dùng chung cho mọi lý do — sai origin, sai RP ID, challenge không khớp, chữ
+ * ký hỏng. Chi tiết chỉ đi vào log: nói rõ "origin không khớp" là đưa bản đồ
+ * cấu hình cho người đang dò.
+ *
+ * Luồng ĐĂNG NHẬP thì dùng `InvalidCredentialsError` thay vì lỗi này — ở đó,
+ * mọi thất bại phải giống hệt nhau, kể cả trường hợp passkey không tồn tại.
+ */
+export class WebAuthnVerificationError extends DomainError {
+  readonly code = "VALIDATION_ERROR" as const;
+  constructor() {
+    super("Không xác minh được passkey. Vui lòng thử lại.");
+  }
+}

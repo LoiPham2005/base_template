@@ -5,6 +5,7 @@ import { TokenService, env as coreEnv } from "@repo/core";
 import type {
   CurrentUserPayload,
   TwoFactorChallengePayload,
+  WebAuthnChallengePayload,
 } from "../common/decorators/current-user.decorator";
 
 /**
@@ -114,6 +115,59 @@ export class SessionService {
       challengeToken: await this.jwt.signAsync(payload, { expiresIn }),
       expiresIn,
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Vé WebAuthn
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Hạn của vé WebAuthn.
+   *
+   * Trùng với `timeout` mặc định mà `@simplewebauthn/server` đặt trong options
+   * (60 giây), cộng dư ra cho người dùng lóng ngóng tìm khoá cứng. Để lâu hơn
+   * là kéo dài cửa sổ phát lại một challenge.
+   */
+  private static readonly WEBAUTHN_TTL = "5m";
+
+  /**
+   * Ký `challenge` vào một vé ngắn hạn.
+   *
+   * Client gửi ngược vé này ở bước xác minh. Kẻ tấn công không tự tạo được vé
+   * hợp lệ, nên không dựng được một luồng đăng ký/đăng nhập giả rồi ép nạn
+   * nhân hoàn tất.
+   */
+  async issueWebAuthnChallenge(
+    typ: "webauthn_reg" | "webauthn_auth",
+    challenge: string,
+    userId?: string,
+  ): Promise<string> {
+    const payload: WebAuthnChallengePayload = {
+      typ,
+      challenge,
+      ...(userId ? { sub: userId } : {}),
+    };
+
+    return this.jwt.signAsync(payload, { expiresIn: SessionService.WEBAUTHN_TTL });
+  }
+
+  /** Đọc `challenge` (và `userId` nếu có) từ vé. Ném 401 cho vé hỏng/sai loại. */
+  async verifyWebAuthnChallenge(
+    token: string,
+    expectedType: "webauthn_reg" | "webauthn_auth",
+  ): Promise<WebAuthnChallengePayload> {
+    try {
+      const payload = await this.jwt.verifyAsync<WebAuthnChallengePayload>(token);
+
+      // Không cho dùng vé ĐĂNG KÝ ở luồng ĐĂNG NHẬP: vé đăng ký mang `sub` của
+      // một người đã đăng nhập, còn luồng đăng nhập thì tin vào passkey. Trộn
+      // hai loại là mở một đường vòng.
+      if (payload.typ !== expectedType) throw new Error("sai loại vé");
+
+      return payload;
+    } catch {
+      throw new UnauthorizedException("Phiên xác thực passkey đã hết hạn. Vui lòng thử lại.");
+    }
   }
 
   /**

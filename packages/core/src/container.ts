@@ -7,6 +7,7 @@ import { VerificationService } from "./auth/verification.service";
 import { AuthService } from "./auth/auth.service";
 import { TwoFactorService } from "./auth/two-factor.service";
 import { OAuthService } from "./auth/oauth.service";
+import { WebAuthnService } from "./auth/webauthn.service";
 import { AuditService } from "./audit/audit.service";
 import { NotificationService } from "./notification/notification.service";
 import { DeviceService } from "./device/device.service";
@@ -51,6 +52,7 @@ export const core = {
   auth: new AuthService(prisma, users, verification, tokens),
   twoFactor: new TwoFactorService(prisma),
   oauth: new OAuthService(prisma, users),
+  webauthn: new WebAuthnService(prisma, users),
   audit: new AuditService(prisma),
   notification: new NotificationService(prisma),
   device: new DeviceService(prisma),

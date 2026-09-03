@@ -50,6 +50,25 @@ const CACHE_TTL_SECONDS = 60;
 /** Đổi tiền tố này khi đổi hình dạng dữ liệu cache, nếu không bản deploy mới đọc phải giá trị cũ. */
 const CACHE_PREFIX = "perm:v1:";
 
+/** Một quyền, kèm lý do nó có (hoặc không có) hiệu lực. */
+export type PermissionExplanation = {
+  key: Permission;
+  /**
+   * `role`   — đến từ vai trò, xem `roles`.
+   * `grant`  — được cấp riêng cho người này, đè lên vai trò.
+   * `denied` — bị TƯỚC riêng. Quyền KHÔNG có hiệu lực, dù vai trò có cho.
+   */
+  source: "role" | "grant" | "denied";
+  /** Các vai trò cho quyền này. Rỗng khi nguồn là ngoại lệ cá nhân thuần tuý. */
+  roles: string[];
+  /** Ai đặt ngoại lệ. Chỉ có với `grant`/`denied`. */
+  grantedBy?: string | null;
+  /** Hạn của ngoại lệ. `null` = vĩnh viễn. */
+  expiresAt?: Date | null;
+  /** `true` khi từng có ngoại lệ nhưng nó đã hết hạn — quyền đã về theo vai trò. */
+  expiredOverride?: boolean;
+};
+
 export class PermissionService {
   constructor(private readonly db: PrismaClient) {}
 
@@ -146,6 +165,96 @@ export class PermissionService {
   async canAll(userId: string, permissions: readonly Permission[]): Promise<boolean> {
     const granted = await this.permissionsFor(userId);
     return permissions.every((permission) => granted.has(permission));
+  }
+
+  /**
+   * Quyền hiệu lực KÈM NGUỒN GỐC — dùng cho màn hỗ trợ/kiểm toán.
+   *
+   * ---
+   * VÌ SAO CẦN, KHI ĐÃ CÓ `permissionsFor()`
+   *
+   * `permissionsFor()` trả về "người này được làm gì" — đủ để QUYẾT ĐỊNH, nhưng
+   * không đủ để GIẢI THÍCH. Khi hệ thống có ngoại lệ cá nhân, câu hỏi thật của
+   * bộ phận hỗ trợ là: "vì sao tài khoản A xoá được người dùng?" — từ vai trò
+   * ADMIN, hay do ai đó cấp riêng, hay một quyền tạm sắp hết hạn?
+   *
+   * Không trả lời được câu đó thì mọi lần rà soát phân quyền đều phải mở
+   * database lên đọc tay.
+   *
+   * ⚠️ KHÔNG cache và KHÔNG dùng trên đường đi nóng: nó đọc nhiều hơn hẳn
+   * `permissionsFor()`. Đây là truy vấn cho một màn hình quản trị, không phải
+   * cho mỗi request.
+   */
+  async explainFor(userId: string): Promise<PermissionExplanation[]> {
+    const user = await this.db.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: {
+        userRoles: {
+          select: {
+            role: {
+              select: {
+                key: true,
+                permissions: { select: { permission: { select: { key: true } } } },
+              },
+            },
+          },
+        },
+        userPermissions: {
+          select: {
+            isGranted: true,
+            grantedBy: true,
+            expiresAt: true,
+            permission: { select: { key: true } },
+          },
+        },
+      },
+    });
+
+    if (!user) return [];
+
+    const byKey = new Map<Permission, PermissionExplanation>();
+
+    // 1. Từ vai trò. Một quyền có thể đến từ NHIỀU vai trò — giữ hết, vì
+    //    "gỡ vai trò nào thì mất quyền này" là câu hỏi tiếp theo của người tra.
+    for (const { role } of user.userRoles) {
+      for (const { permission } of role.permissions) {
+        if (!isKnownPermission(permission.key)) continue;
+
+        const existing = byKey.get(permission.key);
+        if (existing?.source === "role") {
+          existing.roles.push(role.key);
+        } else {
+          byKey.set(permission.key, { key: permission.key, source: "role", roles: [role.key] });
+        }
+      }
+    }
+
+    // 2. Ngoại lệ cá nhân, ghi đè phần trên — đúng thứ tự mà `load()` áp dụng.
+    const now = new Date();
+
+    for (const item of user.userPermissions) {
+      if (!isKnownPermission(item.permission.key)) continue;
+
+      const expired = item.expiresAt !== null && item.expiresAt <= now;
+      const previous = byKey.get(item.permission.key);
+
+      // Ngoại lệ ĐÃ HẾT HẠN không còn tác dụng: quyền quay về đúng những gì vai
+      // trò cho. Hiện nó ra vẫn có ích — người tra thấy được "đã từng cấp".
+      if (expired) {
+        if (previous) previous.expiredOverride = true;
+        continue;
+      }
+
+      byKey.set(item.permission.key, {
+        key: item.permission.key,
+        source: item.isGranted ? "grant" : "denied",
+        roles: previous?.source === "role" ? previous.roles : [],
+        grantedBy: item.grantedBy,
+        expiresAt: item.expiresAt,
+      });
+    }
+
+    return [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
   }
 
   /**

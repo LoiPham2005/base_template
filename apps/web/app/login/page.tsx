@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAccessToken } from "@/lib/session";
+import { linkClass } from "@/lib/ui";
 import { LoginForm } from "./login-form";
 import { PasskeyButton } from "./passkey-button";
 
@@ -33,6 +35,15 @@ export default async function LoginPage({
 
       {/* Tự ẩn trên trình duyệt không hỗ trợ WebAuthn. */}
       <PasskeyButton next={next} />
+
+      <p className="mt-8 flex justify-between text-sm text-slate-500">
+        <Link href="/forgot-password" className={linkClass}>
+          Quên mật khẩu?
+        </Link>
+        <Link href="/register" className={linkClass}>
+          Tạo tài khoản
+        </Link>
+      </p>
     </main>
   );
 }

@@ -135,6 +135,71 @@ describe("PermissionService", () => {
     });
   });
 
+  it("explainFor: nói rõ quyền đến từ ĐÂU", async () => {
+    /*
+     * `permissionsFor()` trả lời "được làm gì" — đủ để quyết định, không đủ để
+     * GIẢI THÍCH. Khi có ngoại lệ cá nhân, câu hỏi thật của bộ phận hỗ trợ là
+     * "vì sao tài khoản này xoá được người dùng?".
+     */
+    const db = createDb({
+      userRoles: [
+        { role: { key: "ADMIN", permissions: [{ permission: { key: "user:read" } }] } },
+        { role: { key: "STAFF", permissions: [{ permission: { key: "user:read" } }] } },
+      ],
+      userPermissions: [
+        {
+          isGranted: true,
+          grantedBy: "admin-1",
+          expiresAt: null,
+          permission: { key: "user:delete" },
+        },
+        {
+          isGranted: false,
+          grantedBy: "admin-1",
+          expiresAt: null,
+          permission: { key: "audit:read" },
+        },
+      ],
+    });
+
+    const explain = await new PermissionService(db).explainFor("u1");
+    const byKey = new Map(explain.map((item) => [item.key, item]));
+
+    // Đến từ hai vai trò — giữ CẢ HAI, vì "gỡ vai trò nào thì mất quyền này"
+    // là câu hỏi tiếp theo của người tra.
+    expect(byKey.get("user:read")).toMatchObject({
+      source: "role",
+      roles: ["ADMIN", "STAFF"],
+    });
+
+    expect(byKey.get("user:delete")).toMatchObject({ source: "grant", grantedBy: "admin-1" });
+    expect(byKey.get("audit:read")).toMatchObject({ source: "denied" });
+  });
+
+  it("explainFor: ngoại lệ HẾT HẠN không còn đè lên vai trò", async () => {
+    // Quyền quay về đúng những gì vai trò cho, nhưng vẫn ghi nhận "đã từng cấp"
+    // để người tra hiểu vì sao có dấu vết trong nhật ký.
+    const db = createDb({
+      userRoles: [{ role: { key: "USER", permissions: [{ permission: { key: "user:read" } }] } }],
+      userPermissions: [
+        {
+          isGranted: false,
+          grantedBy: "admin-1",
+          expiresAt: new Date(Date.now() - 1000),
+          permission: { key: "user:read" },
+        },
+      ],
+    });
+
+    const explain = await new PermissionService(db).explainFor("u1");
+
+    expect(explain[0]).toMatchObject({
+      key: "user:read",
+      source: "role",
+      expiredOverride: true,
+    });
+  });
+
   it("canActOnResource: quyền ':own' chỉ áp dụng cho dữ liệu của chính mình", async () => {
     const db = createDb({
       userRoles: [roleWith("profile:update:own")],

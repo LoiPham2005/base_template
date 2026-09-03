@@ -236,6 +236,19 @@ make dev-web          # chạy web mà KHÔNG chạy api
 open http://localhost:3000/users
 ```
 
+## Trang có sẵn ở `apps/web`
+
+`/` · `/login` (kèm passkey + bước 2FA) · `/register` · `/forgot-password` ·
+`/reset-password` · `/verify-email` · `/confirm-email-change` ·
+`/auth/callback` (OAuth) · `/users`
+
+Bốn trang giữa là **điểm hạ cánh của liên kết trong email** — thiếu chúng thì
+người dùng bấm vào thư và nhận 404.
+
+⚠️ `/verify-email` và `/confirm-email-change` xác thực khi **bấm nút**, không
+phải khi mở trang. Bộ quét liên kết của Gmail/Outlook mở mọi URL trong thư
+trước khi người nhận kịp bấm — token dùng-một-lần sẽ bị đốt mất.
+
 ## Giao diện
 
 Tailwind CSS v4, cấu hình ngay trong `apps/web/app/globals.css` bằng `@theme`

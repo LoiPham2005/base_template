@@ -60,15 +60,31 @@ export class UsersController {
     return this.users.getProfile(id);
   }
 
-  /** Quyền hiệu lực của một người — hợp của vai trò, đã áp ngoại lệ cá nhân. */
+  /**
+   * Quyền hiệu lực của một người, KÈM NGUỒN GỐC.
+   *
+   * Trả cả hai hình dạng có chủ đích:
+   *   • `permissions` — mảng chuỗi, để giao diện ẩn/hiện nút.
+   *   • `explain`     — mỗi quyền kèm lý do: từ vai trò nào, hay do ai cấp
+   *     riêng, hay đang bị tước, hay là quyền tạm sắp hết hạn.
+   *
+   * Vế thứ hai trả lời câu hỏi mà bộ phận hỗ trợ thật sự hỏi — "vì sao tài
+   * khoản này xoá được người dùng?" — thứ mà một danh sách chuỗi trần không nói
+   * được khi hệ thống có ngoại lệ cá nhân.
+   */
   @Get(":id/permissions")
   @RequirePermissions("user:read")
-  @ApiOperation({ summary: "Quyền hiệu lực của một người dùng" })
+  @ApiOperation({ summary: "Quyền hiệu lực của một người dùng, kèm nguồn gốc" })
   async permissionsOf(@Param("id") id: string) {
     const user = await this.users.findById(id);
     if (!user) throw new UserNotFoundError(id);
 
-    return { permissions: [...(await this.permissions.permissionsFor(id))] };
+    const [effective, explain] = await Promise.all([
+      this.permissions.permissionsFor(id),
+      this.permissions.explainFor(id),
+    ]);
+
+    return { permissions: [...effective], explain };
   }
 
   @Post()

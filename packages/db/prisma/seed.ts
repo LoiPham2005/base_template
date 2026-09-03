@@ -1,83 +1,84 @@
-import "dotenv/config";
-import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { config as loadDotenv } from "dotenv";
 import { PrismaClient } from "@prisma/client";
-import argon2 from "argon2";
-
-const prisma = new PrismaClient();
-
-const isProduction = process.env.NODE_ENV === "production";
 
 /**
- * Mật khẩu admin KHÔNG còn giá trị mặc định ghi cứng.
+ * Nạp `.env` ở GỐC workspace.
  *
- * Bản trước dùng "Admin@123" nằm công khai trong mã nguồn, nghĩa là mọi dự án
- * sinh ra từ template này đều có chung một mật khẩu quản trị mà ai đọc repo
- * cũng biết. Ở production giờ thiếu biến là dừng hẳn; ngoài production thì
- * sinh ngẫu nhiên và in ra đúng một lần.
+ * `@repo/core` có sẵn hàm này (`loadEnvFiles`), nhưng KHÔNG import được ở đây:
+ * core phụ thuộc vào `@repo/db`, nên chiều ngược lại sẽ tạo vòng lặp phụ thuộc
+ * giữa hai package — turbo không xếp được thứ tự build, và pnpm cảnh báo.
+ *
+ * Mười dòng lặp lại rẻ hơn nhiều so với một vòng lặp phụ thuộc.
  */
-function resolveAdminPassword(): string {
-  const fromEnv = process.env.SEED_ADMIN_PASSWORD;
-  if (fromEnv) return fromEnv;
+function loadRootEnv(): void {
+  // `.env` riêng của packages/db (nếu có) thắng, vì dotenv không ghi đè biến
+  // đã tồn tại — file nạp trước thắng.
+  loadDotenv({ path: resolve(process.cwd(), ".env"), quiet: true });
 
-  if (isProduction) {
-    throw new Error(
-      "Seed production cần SEED_ADMIN_PASSWORD. Không có mật khẩu mặc định — đó là chủ ý.",
-    );
+  let current = resolve(process.cwd());
+  for (;;) {
+    if (existsSync(join(current, "pnpm-workspace.yaml"))) {
+      loadDotenv({ path: join(current, ".env"), quiet: true });
+      return;
+    }
+
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
   }
-
-  const generated = randomUUID().replaceAll("-", "").slice(0, 20);
-  console.log("\n⚠️  SEED_ADMIN_PASSWORD chưa set. Mật khẩu sinh ngẫu nhiên:");
-  console.log(`    ${generated}`);
-  console.log("    (chỉ hiện một lần — hãy lưu lại ngay)\n");
-  return generated;
 }
 
+loadRootEnv();
+import { seedRbac } from "./seeds/seed-rbac";
+import { seedAdmin } from "./seeds/seed-admin";
+import { seedDev } from "./seeds/seed-dev";
+
+/**
+ * Chạy: `pnpm db:seed`
+ *
+ * ---
+ * SEED PHẢI CHẠY LẠI ĐƯỢC NHIỀU LẦN
+ *
+ * Đây là ràng buộc bắt buộc, không phải mong muốn: seed được gọi sau MỖI lần
+ * deploy (xem `deploy-vps.sh`), nên một seed chỉ chạy được lần đầu sẽ làm hỏng
+ * lần deploy thứ hai. Mọi thao tác ở đây đều là `upsert` hoặc `createMany` với
+ * `skipDuplicates`.
+ *
+ * ---
+ * BA PHẦN, TÁCH RIÊNG THEO MỨC ĐỘ AN TOÀN
+ *
+ *   seedRbac  — quyền & vai trò. Chạy ở MỌI môi trường, kể cả production.
+ *   seedAdmin — tài khoản quản trị đầu tiên, đọc từ ADMIN_EMAIL/ADMIN_PASSWORD.
+ *   seedDev   — dữ liệu mẫu có mật khẩu công khai. CHỈ dev.
+ */
+const prisma = new PrismaClient();
+
 async function main() {
-  console.log("🌱 Seeding database...");
+  const isProduction = process.env.NODE_ENV === "production";
 
-  const adminEmail = process.env.SEED_ADMIN_EMAIL ?? "admin@example.com";
-  const adminPassword = await argon2.hash(resolveAdminPassword());
+  console.log(`🌱 Seeding (NODE_ENV=${process.env.NODE_ENV ?? "development"})…`);
 
-  const admin = await prisma.user.upsert({
-    where: { email: adminEmail },
-    // Không ghi đè mật khẩu của admin đã tồn tại: seed phải chạy lại được
-    // nhiều lần mà không reset thông tin đăng nhập đang dùng.
-    update: {},
-    create: {
-      email: adminEmail,
-      name: "System Admin",
-      password: adminPassword,
-      role: "ADMIN",
-    },
-  });
+  await seedRbac(prisma);
+  console.log("✓ Đã đồng bộ quyền và vai trò hệ thống");
 
-  console.log(`✅ Admin sẵn sàng: ${admin.email}`);
+  await seedAdmin(prisma);
 
-  // Dữ liệu mẫu chỉ dành cho dev — mật khẩu bên dưới là hằng số công khai.
   if (isProduction) {
-    console.log("↷ Bỏ qua user mẫu (đang ở production)");
-    return;
+    console.log("⏭️  Bỏ qua dữ liệu mẫu: đang ở production");
+  } else {
+    await seedDev(prisma);
   }
 
-  const user = await prisma.user.upsert({
-    where: { email: "user@example.com" },
-    update: {},
-    create: {
-      email: "user@example.com",
-      name: "Test User",
-      password: await argon2.hash("devpassword123"),
-      role: "USER",
-    },
-  });
-
-  console.log(`✅ User mẫu: ${user.email} (mật khẩu: devpassword123)`);
+  console.log("🌱 Xong.");
 }
 
 main()
-  .catch((e: unknown) => {
-    console.error("❌ Seed error:", e);
+  .catch((error: unknown) => {
+    console.error("Seed thất bại:", error);
+    // Exit code khác 0 là thứ làm `deploy-vps.sh` dừng lại. Không có dòng này
+    // thì seed hỏng vẫn được coi là deploy thành công.
     process.exitCode = 1;
   })
-  .finally(() => {
-    void prisma.$disconnect();
-  });
+  .finally(() => prisma.$disconnect());

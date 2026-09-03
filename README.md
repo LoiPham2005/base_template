@@ -1,200 +1,256 @@
 # base_template
 
-Khung dùng chung cho mọi dự án. Có 3 cách dùng repo này tuỳ quy mô —
-đọc mục "Chọn cấu hình theo quy mô dự án" bên dưới trước khi bắt đầu,
-đừng mặc định dùng cả `apps/web` + `apps/api` nếu dự án không cần.
+Khung backend **NestJS + Prisma** dùng chung cho mọi dự án, kèm sẵn một app
+Next.js mỏng làm giao diện quản trị. Mục tiêu: cài xong là **chỉ còn viết
+nghiệp vụ** — xác thực, phân quyền, hàng đợi, email, kho tệp, nhật ký, deploy
+đều đã có.
 
 ```
 apps/
-  web/            Next.js 16 (App Router, Turbopack) — BFF mỏng, KHÔNG chứa business logic
-  api/            NestJS — chứa toàn bộ business logic + REST cho web/mobile/3rd-party
+  api/       NestJS + Fastify — REST /api/v1, guard, rate limit, Swagger
+  worker/    BullMQ — job nền: gửi mail, push, dọn token định kỳ
+  web/       Next.js (App Router) — BFF mỏng, KHÔNG chứa business logic
 packages/
-  core/           Business logic thuần (không phụ thuộc framework), CHỈ apps/api dùng
-  db/             Prisma schema + client — CHỈ packages/core được import
-  contracts/      Zod schema dùng chung (form web, DTO api, type core)
-  config/         eslint + tsconfig dùng chung
+  core/      Toàn bộ business logic + hạ tầng (cache, queue, mail, storage…)
+  db/        Prisma schema + migration + seed
+  contracts/ Zod schema + danh mục quyền — dùng chung web / api / worker
+  config/    eslint + tsconfig dùng chung
 ```
 
-## Chọn cấu hình theo quy mô dự án
+---
 
-Đừng chạy cả `apps/web` + `apps/api` nếu dự án không cần — đó là
-over-engineering. Xem **[CONFIGURATIONS.md](./CONFIGURATIONS.md)** để
-biết bảng quyết định và checklist xoá/sửa file cụ thể cho từng cấu
-hình (Web+API mặc định / chỉ API / chỉ Next.js+Prisma).
+## Có sẵn những gì
 
-## Vì sao web KHÔNG gọi thẳng Prisma/core (cấu hình mặc định)
+**Xác thực**
 
-```
-Web (Next.js)  ──HTTP──▶  API (NestJS)  ──▶  packages/core ──▶ Prisma ──▶ DB
-Mobile         ──HTTP──▶ ↗ (CÙNG API, CÙNG endpoint, CÙNG validation)
-```
+- Đăng ký / đăng nhập bằng email **hoặc** tên đăng nhập (một ô nhập duy nhất)
+- Access token JWT ngắn hạn + refresh token **xoay vòng**, lưu SHA-256 trong DB
+- **Phát hiện token bị dùng lại** → huỷ toàn bộ phiên của tài khoản đó
+- Quản lý "thiết bị đang đăng nhập": xem, đăng xuất từng thiết bị hoặc tất cả
+- Xác thực email, quên/đặt lại/đổi mật khẩu (kèm email thông báo đã đổi)
+- Khoá tạm khi sai mật khẩu liên tiếp + rate limit theo IP trên Redis
+- Argon2id, tự nâng cấp hash bcrypt cũ ở lần đăng nhập kế tiếp
+- OAuth Google / GitHub / Facebook / Apple (PKCE, state ký JWT)
 
-`apps/web` chỉ là BFF: Server Component/Server Action gọi `apiFetch()`
-trong `lib/api.ts`, y hệt cách mobile gọi REST. Đổi lại 1 nhịp gọi mạng
-nội bộ mỗi request, đây là kiến trúc đã chạy ổn định và nhất quán trên
-mọi dự án thật (web/api/mobile luôn cùng một nguồn sự thật cho business
-rule, không có đường tắt nào bị bỏ sót khi thêm client mới).
+**Phân quyền (RBAC)**
 
-`packages/core` vẫn tồn tại như lớp business logic thuần — nhưng giờ
-chỉ `apps/api` import nó. Nếu sau này bạn có second API service hoặc
-worker chạy cron/queue, chúng cũng import `packages/core` y như
-`apps/api`, không phải viết lại.
+- Một người **nhiều vai trò**; vai trò tạo/sửa được lúc chạy từ giao diện
+- Quyền chi tiết `<tài-nguyên>:<hành-động>`, danh mục nằm trong code (TypeScript
+  bắt lỗi gõ sai), việc gán nằm trong database
+- Ngoại lệ theo từng cá nhân: **cấp thêm** hoặc **tước bỏ** — tước luôn thắng
+- Kiểm quyền luôn tra lại từ database (có cache), **không** đọc từ token
+
+**Hạ tầng**
+
+- Hàng đợi BullMQ + tiến trình worker riêng, có job định kỳ dọn token
+- Cache & rate limit dùng chung qua Redis, tự lùi về RAM khi chưa có Redis
+- Gửi mail qua SMTP (dev thì ghi ra log; production thiếu cấu hình thì **báo lỗi**)
+- Kho tệp S3/MinIO/R2 bằng presigned URL — API không nhận byte nào
+- Log JSON một dòng, che dữ liệu nhạy cảm, có mã định danh request
+- Nhật ký kiểm toán cho mọi hành động nhạy cảm
+- Thông báo trong app + thiết bị nhận push (chỗ cắm Firebase đã dọn sẵn)
+- Health check tách `liveness` / `readiness`
+
+**Vận hành**
+
+- Docker Compose đầy đủ (Postgres, Redis, Mailpit, api, worker, web)
+- Deploy VPS bằng PM2, deploy Docker, Caddyfile mẫu
+- CI: format, lint, typecheck, test, migrate thật, seed thật, build Docker
+- 45 unit test cho phần bảo mật cốt lõi
+
+---
 
 ## Yêu cầu
 
-- Node >= 20
-- pnpm >= 9 (`corepack enable` nếu chưa có)
-- PostgreSQL (đổi provider trong `packages/db/prisma/schema.prisma` nếu muốn DB khác)
+- Node >= 22 (`.nvmrc`)
+- pnpm >= 9 (`corepack enable`)
+- Docker (cho Postgres/Redis ở máy dev) — hoặc Postgres/Redis cài sẵn
 
-## Cài đặt lần đầu
+## Cài lần đầu
 
 ```bash
-pnpm install
-
-cp packages/db/.env.example packages/db/.env
-cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env
-# sửa DATABASE_URL trong packages/db/.env và apps/api/.env cho đúng Postgres của bạn
-# apps/web/.env chỉ cần API_URL trỏ vào apps/api (mặc định http://localhost:3001)
-
-pnpm db:migrate     # tạo bảng theo schema.prisma
-pnpm db:generate    # sinh Prisma Client
+make setup
 ```
+
+Lệnh đó làm đúng thứ tự bắt buộc: tạo `.env` → cài deps → bật Postgres/Redis/
+Mailpit → migrate → seed. **Mở `.env` sửa `JWT_SECRET`** trước khi dùng thật:
+
+```bash
+openssl rand -base64 48
+```
+
+Muốn có tài khoản quản trị đầu tiên thì điền `ADMIN_EMAIL` / `ADMIN_PASSWORD`
+rồi chạy lại `make db-seed`. Cố ý **không** có tài khoản mặc định viết cứng
+trong mã nguồn — một cặp `admin/admin123` như vậy sẽ theo dự án lên tận
+production.
+
+Ở môi trường dev, `db:seed` còn tạo 4 tài khoản mẫu (mật khẩu chung
+`matkhau123`): `admin@dev.local`, `manager@dev.local`, `staff@dev.local`,
+`user@dev.local`.
 
 ## Chạy dev
 
 ```bash
-pnpm dev            # build packages 1 lần rồi chạy song song web + api
-pnpm dev:web        # chỉ web  → http://localhost:3000
-pnpm dev:api        # chỉ api  → http://localhost:3001 (Swagger tại /docs)
+make dev          # web + api + worker cùng lúc
+make dev-api      # http://localhost:3001/docs   (Swagger)
+make dev-web      # http://localhost:3000
+make dev-worker   # http://localhost:3002/health (số job trong hàng đợi)
 ```
 
-`apps/web` cần `apps/api` đang chạy để có dữ liệu — chạy `pnpm dev`
-(cả hai cùng lúc), không chỉ `pnpm dev:web`.
+Email ở dev bị Mailpit bắt lại — mở **http://localhost:8025** để đọc link xác
+thực/đặt lại mật khẩu.
 
-`packages/core|db|contracts` được biên dịch sang `dist/` (NestJS chạy
-Node thật nên cần JS thật, không đọc trực tiếp `.ts` như Next.js).
-`pnpm dev` tự build chúng một lần trước khi khởi động web/api. Nếu bạn
-đang sửa liên tục trong `packages/core` và muốn tự động rebuild, mở
-thêm 1 terminal chạy `pnpm --filter @repo/core dev` (tsc --watch).
+---
+
+## Kiến trúc: vì sao web KHÔNG gọi thẳng Prisma
+
+```
+Web (Next.js)  ──HTTP──▶  API (NestJS)  ──▶  packages/core ──▶ Prisma ──▶ DB
+Mobile         ──HTTP──▶ ↗ (CÙNG endpoint, CÙNG validation, CÙNG phân quyền)
+Worker         ─────────────────────────▶ packages/core ──▶ Prisma ──▶ DB
+```
+
+`apps/web` chỉ là BFF: Server Component / Server Action gọi `apiFetch()` trong
+`lib/api.ts`, y hệt cách mobile gọi REST. Đổi lại một nhịp gọi mạng nội bộ mỗi
+request, và nhận được điều quan trọng hơn nhiều: **không có đường tắt nào bỏ
+qua một luật nghiệp vụ**. Thêm client mới (app, đối tác, webhook) không cần
+kiểm lại xem có chỗ nào quên áp quyền.
+
+`apps/worker` thì import thẳng `packages/core` — nó không phải một client, nó
+là chính hệ thống chạy ở tiến trình khác.
+
+**ESLint enforce sẵn hai luật này**: `apps/api` không import `@repo/db`,
+`apps/web` không import `@repo/core` lẫn `@repo/db`. Thấy lỗi
+`no-restricted-imports` ở hai chỗ đó nghĩa là logic đang bị đặt sai lớp.
+
+---
 
 ## Thêm một domain mới (ví dụ "order")
 
-1. Thêm model vào `packages/db/prisma/schema.prisma`, chạy `pnpm db:migrate`.
-2. Thêm Zod schema vào `packages/contracts/src/order.ts`, export ở `index.ts`.
-3. Viết `OrderService` thuần trong `packages/core/src/order/order.service.ts`,
-   đăng ký instance trong `packages/core/src/container.ts`.
-4. Thêm `OrderController` + `OrderModule` trong `apps/api/src/order/`, copy
-   đúng khuôn của `user/` — bind `{ provide: OrderService, useValue: core.order }`.
-5. Web: gọi `apiFetch<Order[]>("/orders")` trong Server Component/Server Action
-   (xem `apps/web/app/users/page.tsx` làm mẫu). Mobile gọi cùng endpoint đó.
+1. **Schema** — thêm model vào `packages/db/prisma/schema.prisma`, chạy
+   `make db-migrate`.
 
-Business logic chỉ viết một lần trong `packages/core`; web và mobile
-không bao giờ có bản sao thứ hai của validation/business rule.
+2. **Contracts** — `packages/contracts/src/order.ts`: Zod schema cho input/
+   output, export ở `index.ts`. Thêm quyền `order:read`, `order:create`… vào
+   `PERMISSIONS` và `PERMISSION_METADATA` trong `permissions.ts`, gán vào vai
+   trò trong `DEFAULT_ROLE_PERMISSIONS`, rồi `make db-seed`.
 
-## Nguyên tắc kiến trúc (ESLint enforce sẵn)
+3. **Core** — `packages/core/src/order/order.service.ts`, nhận `PrismaClient`
+   qua constructor. Đăng ký trong `container.ts`. Viết test cạnh file service
+   (mock Prisma, không cần database).
 
-- `apps/api` không được import `@repo/db` trực tiếp — phải qua `@repo/core`.
-- `apps/web` không được import `@repo/core` lẫn `@repo/db` — phải qua
-  `lib/api.ts` gọi HTTP sang `apps/api`.
+4. **API** — `apps/api/src/orders/`: copy đúng khuôn của `users/`.
 
-Nếu ESLint báo `no-restricted-imports` ở 2 chỗ trên, nghĩa là logic
-đang bị đặt sai lớp.
+   ```ts
+   @Get()
+   @RequirePermissions("order:read")
+   async list(@Query() query: ListOrdersDto) { … }
+   ```
 
-## Những lỗi cần tránh khi mở rộng base này
+   Module khai `{ provide: OrderService, useValue: core.order }`.
 
-Rút ra từ việc so sánh với các dự án thật đã có:
+5. **Web / Mobile** — gọi `apiFetch<Order[]>("/orders")`. Cùng một endpoint.
 
-- **Đừng để 2 thư viện validate cùng tồn tại** (vd Zod + class-validator +
-  Joi trộn lẫn). Dùng đúng 1 chuẩn: Zod trong `packages/contracts`, cả
-  `nestjs-zod` (api) và `react-hook-form` (web) đều đọc từ đó.
-- **Đừng để lại cấu hình ORM/thư viện cũ chưa xoá** (vd cấu hình TypeORM
-  song song với Prisma dù không dùng) — code chết gây hiểu lầm cho người
-  sau. Xoá hẳn khi migrate, đừng "để đó phòng khi cần".
-- **Đừng commit mock data cạnh API thật** (vd `src/mocks/` trùng tên với
-  `lib/*.ts` thật) — dễ import nhầm. Nếu cần mock, đặt trong `__mocks__/`
-  hoặc file test, không đặt cạnh code chạy production.
-- **Đừng cài test runner rồi không viết test** — nếu có `vitest`/`jest`
-  trong `package.json`, phải có ít nhất test cho `packages/core` (xem
-  `packages/core/src/user/user.service.test.ts` làm mẫu: mock Prisma,
-  không cần DB thật, chạy trong vài giây).
-- **Token/session**: ưu tiên httpOnly cookie set từ `apps/web` (BFF) hơn
-  lưu JWT thẳng vào `localStorage` ở client — tránh lộ token qua XSS.
-- **Không commit script debug rác** (`tmp-check-*.ts`, `check_db.ts`...)
-  vào cùng thư mục code — dọn hoặc để trong `scripts/` có `.gitignore`.
+Business logic viết **một lần** trong `packages/core`; web và mobile không bao
+giờ có bản sao thứ hai của validation hay business rule.
 
-## Test
+---
 
-```bash
-pnpm test           # chạy vitest trong packages/core (mock Prisma, không cần DB thật)
-```
+## Danh sách endpoint
 
-## Build & deploy
+Tất cả nằm dưới `/api/v1`. Thành công trả `{ data: … }`, lỗi trả
+`{ error: { code, message, fields? } }` — client nên `switch` theo `code`,
+**không** theo `message`.
 
-```bash
-pnpm build          # build cả web (apps/web/.next) và api (apps/api/dist)
-```
+| Nhóm      | Endpoint                                                                                                                                                  |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth      | `POST /auth/register` · `POST /auth/login` · `POST /auth/refresh` · `POST /auth/logout`                                                                   |
+|           | `GET /auth/me` · `PATCH /auth/me` · `POST /auth/change-password`                                                                                          |
+|           | `POST /auth/forgot-password` · `POST /auth/reset-password`                                                                                                |
+|           | `POST /auth/verify-email` · `POST /auth/verify-email/request`                                                                                             |
+| Phiên     | `GET /auth/sessions` · `DELETE /auth/sessions/:id` · `DELETE /auth/sessions`                                                                              |
+| OAuth     | `GET /auth/oauth/providers` · `GET /auth/oauth/:provider/start` · `POST /auth/oauth/exchange` · `GET /auth/oauth/linked` · `DELETE /auth/oauth/:provider` |
+| Users     | `GET /users` · `GET /users/:id` · `POST /users` · `PATCH /users/:id` · `DELETE /users/:id`                                                                |
+|           | `PUT /users/:id/roles` · `PUT /users/:id/status` · `PUT /users/:id/permissions`                                                                           |
+| RBAC      | `GET /permissions` · `GET /roles` · `POST /roles` · `PATCH /roles/:key` · `DELETE /roles/:key`                                                            |
+| Thông báo | `GET /notifications` · `GET /notifications/unread-count` · `POST /notifications`                                                                          |
+| Thiết bị  | `POST /devices` · `GET /devices` · `DELETE /devices`                                                                                                      |
+| Nhật ký   | `GET /audit-logs`                                                                                                                                         |
+| Tệp       | `POST /files/presign`                                                                                                                                     |
+| Health    | `GET /health` · `GET /health/ready`                                                                                                                       |
 
-- `apps/web` → deploy Vercel (hoặc `next start` sau build). Chỉ cần biết
-  `API_URL` của `apps/api`, không cần biết `DATABASE_URL`.
-- Mobile (Flutter/React Native) trỏ thẳng vào `apps/api`, dùng Swagger
-  doc tại `/docs` để sinh client hoặc tham chiếu contract.
+Swagger đầy đủ ở `/docs` (bật ở dev, tắt trên production trừ khi
+`ENABLE_SWAGGER=true`).
 
-`apps/api` là nơi duy nhất giữ `DATABASE_URL`, deploy được bằng **cả 3
-cách** dưới đây — chọn theo hạ tầng đang có, không cần chọn trước:
+---
 
-### A. Docker / Railway
+## Bảo mật: những quyết định đã chốt
 
-```bash
-docker build -f apps/api/Dockerfile -t my-api .
-docker run -p 3001:3001 -e DATABASE_URL="..." my-api
-```
+Đây là phần đáng đọc nhất trước khi sửa. Mỗi dòng đều có ghi chú "vì sao" ngay
+trong mã nguồn.
 
-`apps/api/Dockerfile` đã build+chạy thật để xác nhận (multi-stage,
-dùng `turbo prune` nên image chỉ chứa đúng thứ `apps/api` cần —
-`packages/core|db|contracts`, không kéo theo `apps/web`). Railway đọc
-Dockerfile này trực tiếp, không cần thêm cấu hình gì khác.
+| Quyết định                                                   | Vì sao                                                                   |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| Access token 15 phút                                         | JWT đã ký thì không thu hồi được — hạn của nó là thứ giới hạn thiệt hại  |
+| Refresh token xoay vòng, lưu SHA-256                         | Rò database không đồng nghĩa với rò phiên đăng nhập                      |
+| Dùng lại token đã thu hồi → huỷ hết phiên                    | Chỉ có một cách giải thích: token đã bị đánh cắp                         |
+| Mọi nhánh đăng nhập sai đều trả cùng một lỗi, cùng thời gian | Nếu không, đo thời gian phản hồi là dò được email nào đã đăng ký         |
+| Quyền tra từ DB mỗi request (có cache), không đọc từ token   | Người vừa bị tước quyền phải mất quyền NGAY, không phải sau 15 phút      |
+| "Tước quyền" cá nhân thắng mọi vai trò                       | Cần chặn gấp thì phải chặn được ngay                                     |
+| Không cho tự đổi vai trò / tự khoá / tự xoá chính mình       | Quản trị viên cuối cùng tự khoá mình ra ngoài là không có đường quay lại |
+| `forgot-password` luôn trả 204                               | Bất kỳ khác biệt nào cũng biến nó thành công cụ dò người dùng            |
+| Đổi mật khẩu → thu hồi mọi phiên khác                        | Kịch bản điển hình của luồng này là tài khoản đã bị chiếm                |
+| Upload bằng presigned URL                                    | API không phải nới `bodyLimit` cho mọi endpoint                          |
+| `CORS_ORIGIN=*` bị chặn trên production                      | Wildcard + credentials là cấu hình mâu thuẫn                             |
+| `JWT_SECRET` không có giá trị mặc định                       | Thà không khởi động được, còn hơn ký bằng khoá ai cũng biết              |
 
-### B. VPS tay (PM2)
+---
 
-```bash
-pnpm build
-cd apps/api && pm2 start ecosystem.config.js   # lần đầu
-cd apps/web && pm2 start ecosystem.config.js   # nếu web cũng self-host trên VPS này
-pm2 reload ecosystem.config.js                  # sau khi build lại, zero-downtime
-```
-
-`ecosystem.config.js` (trong mỗi app) mặc định `instances: 1` (1
-connection pool Postgres cho api) — chỉ tăng cluster mode nếu
-`DATABASE_URL` đã cấu hình connection limit phù hợp.
-
-PM2 chỉ giữ process Node sống — cần thêm 1 lớp public-facing HTTPS/reverse
-proxy trước nó. Repo có sẵn `Caddyfile` ở root cho việc này (adapt từ
-Caddyfile thật của sports_booking, chỉ đổi domain Docker service thành
-`localhost` vì đây là VPS trần, không phải container):
+## Cắt bớt cho dự án nhỏ
 
 ```bash
-# sửa 2 domain placeholder trong Caddyfile trước, trỏ DNS về IP server này
-sudo caddy run --config Caddyfile
+pnpm scaffold:api-only     # chỉ API cho mobile — xoá apps/web
+pnpm scaffold:no-worker    # job chạy thẳng trong request — xoá apps/worker
 ```
 
-Caddy tự lấy/renew chứng chỉ Let's Encrypt cho domain đã khai — không
-cần cấu hình HTTPS tay. **Lưu ý:** cú pháp Caddyfile này copy gần như
-nguyên vẹn từ sports_booking (chỉ đổi `frontend:3000`/`app:3001` →
-`localhost:3000`/`localhost:3001`) nhưng chưa chạy `caddy validate` được
-trong môi trường dựng base này (thiếu quyền admin để cài Caddy CLI) —
-nên tự chạy `caddy validate --config Caddyfile` trước khi deploy thật.
+Chạy không kèm `--yes` để xem trước sẽ đổi gì. Chi tiết đánh đổi:
+[CONFIGURATIONS.md](./CONFIGURATIONS.md).
 
-### C. Fly.io
+Chỉ cần **một** app Next.js duy nhất? Dùng repo `nextjs_base` thay vì cắt repo
+này — toàn bộ lớp xác thực/phân quyền ở đây nằm trong `apps/api`, bỏ nó đi là
+phải viết lại chứ không phải xoá một thư mục.
 
-Dùng chung `apps/api/Dockerfile` — Fly đọc Dockerfile giống Railway,
-chỉ cần `fly launch --dockerfile apps/api/Dockerfile`.
+---
 
-## Git hooks (Husky)
+## Deploy
 
-`pnpm install` tự cấu hình pre-commit hook (qua script `prepare`) —
-mỗi lần commit, `lint-staged` tự chạy `prettier --write` trên đúng các
-file đang stage (không phải toàn repo). Đã test thật: commit 1 file cố
-tình format sai → hook tự sửa lại đúng chuẩn trước khi commit hoàn tất,
-không cần làm gì thêm. Cấu hình tại `.husky/pre-commit` +
-`lint-staged` trong `package.json` root.
+```bash
+make deploy-docker    # Docker Compose (khuyến nghị)
+make deploy-vps       # PM2 + Node trực tiếp trên VPS
+```
+
+Trước khi deploy production, kiểm đủ 5 điều:
+
+1. `JWT_SECRET` là chuỗi ngẫu nhiên **riêng của môi trường đó** (khác dev).
+2. `CORS_ORIGIN` là domain cụ thể, không phải `*`.
+3. `APP_URL` trỏ đúng domain thật — sai là link trong email vô dụng.
+4. `SMTP_HOST` đã cấu hình. Thiếu thì app **báo lỗi** thay vì nuốt email.
+5. `REDIS_URL` đã có nếu chạy từ 2 instance trở lên — không thì rate limit bị
+   nhân lên theo số instance.
+
+Kiểm tra sau khi deploy: `GET /api/v1/health/ready` phải trả `status: "ok"`.
+Thành phần nào chưa cấu hình sẽ hiện `disabled` (bình thường), hỏng thì hiện
+`down`.
+
+---
+
+## Lệnh hay dùng
+
+```bash
+make check        # format + lint + typecheck + test — chạy trước khi commit
+make db-studio    # xem/sửa dữ liệu bằng giao diện
+make db-reset     # xoá sạch DB rồi dựng lại (CHỈ dev)
+make docker-logs  # xem log mọi container
+```
+
+`make help` liệt kê đầy đủ.

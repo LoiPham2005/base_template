@@ -1,51 +1,50 @@
-import { z } from "zod";
 import { redirect } from "next/navigation";
-import { userSchema } from "@repo/contracts";
+import type { Paginated, PublicUser } from "@repo/contracts";
 import { apiFetch, ApiError } from "@/lib/api";
-import { getAccessToken } from "@/lib/session";
 import { logoutAction } from "../login/actions";
 import { UserForm } from "./user-form";
 
-// Mutable, per-request data — never statically prerendered at build time.
+// Dữ liệu thay đổi theo người dùng và theo request — không bao giờ prerender.
 export const dynamic = "force-dynamic";
 
-const usersResponseSchema = z.array(userSchema);
-
-// Server Component — calls apps/api over HTTP, the same REST endpoint
-// the mobile app hits. Still server-rendered/streamed; the network hop
-// stays inside the datacenter, not the user's browser.
+/**
+ * Server Component gọi `apps/api` qua HTTP, đúng endpoint mà app mobile gọi.
+ * Vẫn render/stream ở server; nhịp gọi mạng nằm trong nội bộ datacenter, không
+ * phải trên trình duyệt người dùng.
+ */
 export default async function UsersPage() {
-  // Kiểm tra sớm chỉ để hiện trang đăng nhập thay vì ném 401 vào mặt người
-  // dùng. Đây KHÔNG phải lớp bảo vệ — quyền do apps/api quyết định.
-  if (!(await getAccessToken())) {
-    redirect("/login");
-  }
+  let page: Paginated<PublicUser>;
 
-  let users: z.infer<typeof usersResponseSchema>;
   try {
-    users = usersResponseSchema.parse(await apiFetch<unknown>("/users"));
+    page = await apiFetch<Paginated<PublicUser>>("/users?page=1&limit=20");
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
-      redirect("/login"); // token hết hạn hoặc đã bị thu hồi
+      // Token vừa bị thu hồi giữa chừng. `middleware.ts` lo phần gia hạn thông
+      // thường; tới được đây nghĩa là cả refresh cũng không còn dùng được.
+      redirect("/login");
     }
+
     if (error instanceof ApiError && error.status === 403) {
       return (
         <main style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
           <h1>Không có quyền</h1>
-          <p>Trang này chỉ dành cho tài khoản ADMIN.</p>
+          <p>
+            Trang này cần quyền <code>user:read</code>. Liên hệ quản trị viên để được cấp.
+          </p>
           <form action={logoutAction}>
             <button type="submit">Đăng xuất</button>
           </form>
         </main>
       );
     }
+
     throw error;
   }
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Users</h1>
+        <h1>Người dùng ({page.meta.total})</h1>
         <form action={logoutAction}>
           <button type="submit">Đăng xuất</button>
         </form>
@@ -54,13 +53,18 @@ export default async function UsersPage() {
       <UserForm />
 
       <ul>
-        {users.map((user) => (
+        {page.items.map((user) => (
           <li key={user.id}>
-            {user.email} {user.name ? `— ${user.name}` : ""}
+            {user.email ?? user.username ?? user.phone}
+            {user.fullName ? ` — ${user.fullName}` : ""}
+            <span style={{ color: "#666", marginLeft: 8, fontSize: 13 }}>
+              [{user.roles.join(", ") || "chưa có vai trò"}] · {user.status}
+            </span>
           </li>
         ))}
       </ul>
-      {users.length === 0 && <p>No users yet.</p>}
+
+      {page.items.length === 0 && <p>Chưa có người dùng nào.</p>}
     </main>
   );
 }

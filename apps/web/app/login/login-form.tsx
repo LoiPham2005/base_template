@@ -5,26 +5,31 @@ import { loginAction, type LoginState } from "./actions";
 
 const initialState: LoginState = {};
 
-export function LoginForm() {
+export function LoginForm({ next }: { next?: string }) {
   const [state, formAction, isPending] = useActionState(loginAction, initialState);
 
   return (
     <form action={formAction} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* Trang người dùng định vào trước khi bị chuyển tới đây. */}
+      <input type="hidden" name="next" value={next ?? "/users"} />
+
       <div>
-        <label htmlFor="email" style={{ display: "block", marginBottom: 4 }}>
-          Email
+        <label htmlFor="identifier" style={{ display: "block", marginBottom: 4 }}>
+          Email hoặc tên đăng nhập
         </label>
+        {/* Một ô cho cả hai: người dùng không nhớ mình đã đăng ký bằng đường
+            nào. API phân biệt bằng ký tự "@". */}
         <input
-          id="email"
-          name="email"
-          type="email"
+          id="identifier"
+          name="identifier"
+          type="text"
           required
-          autoComplete="email"
-          aria-invalid={state.fieldErrors?.email ? true : undefined}
+          autoComplete="username"
+          aria-invalid={state.fieldErrors?.identifier ? true : undefined}
           style={{ width: "100%", padding: 8 }}
         />
-        {state.fieldErrors?.email && (
-          <p style={{ color: "crimson", fontSize: 13 }}>{state.fieldErrors.email[0]}</p>
+        {state.fieldErrors?.identifier && (
+          <p style={{ color: "crimson", fontSize: 13 }}>{state.fieldErrors.identifier[0]}</p>
         )}
       </div>
 

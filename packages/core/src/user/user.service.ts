@@ -1,86 +1,483 @@
-import { Prisma, type PrismaClient } from "@repo/db";
-import type { CreateUserInput } from "@repo/contracts";
+import type { Prisma, PrismaClient } from "@repo/db";
+import {
+  SYSTEM_ROLES,
+  buildPaginationMeta,
+  isKnownPermission,
+  toPrismaPage,
+  type CreateUserInput,
+  type ListUsersInput,
+  type Paginated,
+  type PublicUser,
+  type UpdateProfileInput,
+  type UpdateUserInput,
+} from "@repo/contracts";
+import { CryptoUtils } from "../common/crypto";
+import {
+  DuplicateFieldError,
+  SelfActionForbiddenError,
+  UnknownPermissionError,
+  UnknownRoleKeyError,
+  UserNotFoundError,
+} from "../common/errors";
 
 /**
- * Plain class, no framework decorators. Instantiated with `new` in
- * Next.js (apps/web/lib/container.ts) and registered as a Nest provider
- * in apps/api — same logic, two entry points.
+ * `select` dùng chung cho MỌI truy vấn trả user ra ngoài.
  *
- * Input is assumed already validated by the caller (react-hook-form +
- * zodResolver on the web, nestjs-zod DTO on the API) against the same
- * @repo/contracts schema, so this layer does not re-validate.
+ * Danh sách tường minh, KHÔNG dùng `select: undefined` (lấy hết cột): cột
+ * `password` phải không bao giờ rời khỏi tầng này, và cách chắc chắn nhất là
+ * không bao giờ đọc nó lên trừ khi đang xác thực.
  */
-import { CryptoUtils } from "../common/crypto";
-
-/** Không bao giờ để cột `password` rời khỏi service. */
-const PUBLIC_USER_FIELDS = {
+const USER_SELECT = {
   id: true,
   email: true,
-  name: true,
-  role: true,
+  phone: true,
+  username: true,
+  status: true,
+  emailVerifiedAt: true,
   createdAt: true,
   updatedAt: true,
-} as const;
+  profile: { select: { fullName: true, avatarUrl: true } },
+  userRoles: { select: { role: { select: { key: true } } } },
+} satisfies Prisma.UserSelect;
 
-export type PublicUser = Prisma.UserGetPayload<{ select: typeof PUBLIC_USER_FIELDS }>;
+type UserRow = Prisma.UserGetPayload<{ select: typeof USER_SELECT }>;
 
-/** Trần cứng cho `take`, để một query độc hại không kéo cả bảng về. */
-const MAX_PAGE_SIZE = 100;
+/**
+ * Làm phẳng bản ghi Prisma thành hình dạng công khai.
+ *
+ * `roles` thành mảng chuỗi thay vì mảng object lồng: client chỉ quan tâm khoá
+ * vai trò, và `user.roles.includes("ADMIN")` đọc dễ hơn hẳn
+ * `user.userRoles.some(r => r.role.key === "ADMIN")`.
+ */
+export function toPublicUser(row: UserRow): PublicUser {
+  const { profile, userRoles, ...rest } = row;
+  return {
+    ...rest,
+    fullName: profile?.fullName ?? null,
+    avatarUrl: profile?.avatarUrl ?? null,
+    roles: userRoles.map((item) => item.role.key),
+  };
+}
 
 export class UserService {
   constructor(private readonly db: PrismaClient) {}
 
-  async create(input: CreateUserInput): Promise<PublicUser> {
-    // null chứ không phải "": chuỗi rỗng là một mật khẩu "hợp lệ" nhìn từ tầng
-    // dữ liệu, còn null diễn đạt đúng "tài khoản chưa đặt mật khẩu".
-    const password = input.password ? await CryptoUtils.hashPassword(input.password) : null;
+  // -------------------------------------------------------------------------
+  // Đọc
+  // -------------------------------------------------------------------------
 
-    try {
-      return await this.db.user.create({
-        data: {
-          email: input.email,
-          password,
-          name: input.name,
-          role: input.role ?? "USER",
-        },
-        select: PUBLIC_USER_FIELDS,
-      });
-    } catch (error) {
-      // Dựa vào unique constraint thay vì "kiểm tra rồi mới ghi": hai request
-      // đồng thời cùng một email đều vượt qua được bước kiểm tra, chỉ database
-      // mới phân xử được.
-      if (isPrismaError(error, "P2002")) {
-        throw new UserAlreadyExistsError(input.email);
-      }
-      throw error;
+  async findById(
+    id: string,
+    options: { includeDeleted?: boolean } = {},
+  ): Promise<PublicUser | null> {
+    const row = await this.db.user.findFirst({
+      where: { id, ...(options.includeDeleted ? {} : { deletedAt: null }) },
+      select: USER_SELECT,
+    });
+
+    return row ? toPublicUser(row) : null;
+  }
+
+  /**
+   * Tra theo email.
+   *
+   * Chuẩn hoá chữ thường TRƯỚC khi tra: email được lưu ở dạng chữ thường, nên
+   * tra bằng chuỗi thô làm `Loi@X.com` không khớp dòng nào — và lỗi đó im lặng
+   * ở những luồng luôn trả 200 theo thiết kế (quên mật khẩu).
+   */
+  async findByEmail(email: string): Promise<PublicUser | null> {
+    const row = await this.db.user.findFirst({
+      where: { email: email.trim().toLowerCase(), deletedAt: null },
+      select: USER_SELECT,
+    });
+
+    return row ? toPublicUser(row) : null;
+  }
+
+  async list(input: ListUsersInput): Promise<Paginated<PublicUser>> {
+    const where: Prisma.UserWhereInput = {
+      ...(input.includeDeleted ? {} : { deletedAt: null }),
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.roleKey ? { userRoles: { some: { role: { key: input.roleKey } } } } : {}),
+      ...(input.q
+        ? {
+            OR: [
+              { email: { contains: input.q, mode: "insensitive" } },
+              { username: { contains: input.q, mode: "insensitive" } },
+              { phone: { contains: input.q } },
+              { profile: { fullName: { contains: input.q, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+    };
+
+    // Đếm và lấy trang song song: hai truy vấn độc lập, chạy tuần tự là tự cộng
+    // thêm một lượt đi-về database vào mỗi lần mở danh sách.
+    const [total, rows] = await Promise.all([
+      this.db.user.count({ where }),
+      this.db.user.findMany({
+        where,
+        select: USER_SELECT,
+        orderBy: { createdAt: "desc" },
+        ...toPrismaPage(input),
+      }),
+    ]);
+
+    return { items: rows.map(toPublicUser), meta: buildPaginationMeta(total, input) };
+  }
+
+  // -------------------------------------------------------------------------
+  // Ghi
+  // -------------------------------------------------------------------------
+
+  /**
+   * Đổi danh sách khoá vai trò thành id.
+   *
+   * Ném lỗi khi có khoá không tồn tại thay vì lặng lẽ bỏ qua: bỏ qua nghĩa là
+   * người quản trị bấm "gán vai trò KE_TOAN", hệ thống báo thành công, mà
+   * người dùng không nhận được vai trò nào.
+   */
+  private async resolveRoleIds(roleKeys: readonly string[]): Promise<string[]> {
+    const roles = await this.db.role.findMany({
+      where: { key: { in: [...roleKeys] } },
+      select: { id: true, key: true },
+    });
+
+    const found = new Set(roles.map((role) => role.key));
+    const missing = roleKeys.filter((key) => !found.has(key));
+    if (missing.length > 0) throw new UnknownRoleKeyError(missing);
+
+    return roles.map((role) => role.id);
+  }
+
+  /**
+   * Chặn trước những va chạm mà database sẽ từ chối.
+   *
+   * Có thể để unique constraint tự bắn lỗi, nhưng lỗi P2002 của Prisma chỉ cho
+   * biết "một cột nào đó trùng" — kiểm ở đây thì báo được ĐÚNG trường nào,
+   * hiển thị ngay dưới ô nhập tương ứng.
+   *
+   * ⚠️ Vẫn có khe hở đua (hai request cùng lúc). Đó là lý do
+   * `catchDuplicate` bên dưới vẫn phải bắt P2002 — kiểm trước là để có thông
+   * báo tử tế, không phải để thay thế ràng buộc của database.
+   */
+  private async assertUnique(
+    fields: { email?: string; username?: string; phone?: string },
+    excludeUserId?: string,
+  ): Promise<void> {
+    const checks: Array<[keyof typeof fields, string]> = [];
+    if (fields.email) checks.push(["email", fields.email]);
+    if (fields.username) checks.push(["username", fields.username]);
+    if (fields.phone) checks.push(["phone", fields.phone]);
+    if (checks.length === 0) return;
+
+    const existing = await this.db.user.findFirst({
+      where: {
+        OR: checks.map(([field, value]) => ({ [field]: value })),
+        ...(excludeUserId ? { NOT: { id: excludeUserId } } : {}),
+      },
+      select: { email: true, username: true, phone: true },
+    });
+
+    if (!existing) return;
+
+    for (const [field, value] of checks) {
+      if (existing[field] === value) throw new DuplicateFieldError(field, value);
     }
   }
 
-  async list(options: { skip?: number; take?: number } = {}): Promise<PublicUser[]> {
-    return this.db.user.findMany({
-      select: PUBLIC_USER_FIELDS,
-      orderBy: { createdAt: "desc" },
-      skip: options.skip ?? 0,
-      take: Math.min(options.take ?? 50, MAX_PAGE_SIZE),
+  /** Đổi P2002 của Prisma thành lỗi nghiệp vụ chỉ đúng trường bị trùng. */
+  private static catchDuplicate(error: unknown): never {
+    const code = (error as { code?: string }).code;
+    const target = (error as { meta?: { target?: string[] } }).meta?.target ?? [];
+
+    if (code === "P2002") {
+      for (const field of ["email", "username", "phone"] as const) {
+        if (target.includes(field)) throw new DuplicateFieldError(field);
+      }
+    }
+
+    throw error;
+  }
+
+  async create(input: CreateUserInput & { actorId?: string | null }): Promise<PublicUser> {
+    await this.assertUnique(input);
+
+    const roleIds = await this.resolveRoleIds(
+      input.roleKeys?.length ? input.roleKeys : [SYSTEM_ROLES.USER],
+    );
+
+    const password = input.password ? await CryptoUtils.hashPassword(input.password) : null;
+
+    try {
+      const row = await this.db.user.create({
+        data: {
+          email: input.email ?? null,
+          phone: input.phone ?? null,
+          username: input.username ?? null,
+          password,
+          status: input.status,
+          // Tạo hồ sơ ngay cùng lúc thay vì để null: mọi màn hình đọc
+          // `user.profile` sẽ không phải xử lý nhánh "chưa có hồ sơ", và một
+          // nhánh không tồn tại là một nhánh không thể sai.
+          profile: { create: { fullName: input.fullName ?? null } },
+          userRoles: {
+            create: roleIds.map((roleId) => ({ roleId, assignedBy: input.actorId ?? null })),
+          },
+        },
+        select: USER_SELECT,
+      });
+
+      return toPublicUser(row);
+    } catch (error) {
+      UserService.catchDuplicate(error);
+    }
+  }
+
+  async update(
+    id: string,
+    input: UpdateUserInput,
+    options: { actorId?: string | null } = {},
+  ): Promise<PublicUser> {
+    const existing = await this.db.user.findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!existing) throw new UserNotFoundError(id);
+
+    // Tự đổi vai trò của CHÍNH MÌNH là cách nhanh nhất để quản trị viên cuối
+    // cùng tự khoá mình ra ngoài — và không còn ai vào sửa được nữa.
+    if (input.roleKeys && options.actorId && options.actorId === id) {
+      throw new SelfActionForbiddenError("đổi vai trò của");
+    }
+
+    await this.assertUnique(input, id);
+
+    const roleIds = input.roleKeys ? await this.resolveRoleIds(input.roleKeys) : null;
+
+    try {
+      const row = await this.db.$transaction(async (tx) => {
+        if (roleIds) {
+          // Thay thế toàn bộ chứ không cộng dồn: màn phân vai trò là một bảng
+          // tick, gửi nguyên trạng thái cuối cùng thì không có chỗ cho lệch pha
+          // giữa "vừa bỏ tick" và "chưa bao giờ có".
+          await tx.userRole.deleteMany({ where: { userId: id } });
+          await tx.userRole.createMany({
+            data: roleIds.map((roleId) => ({
+              userId: id,
+              roleId,
+              assignedBy: options.actorId ?? null,
+            })),
+          });
+        }
+
+        const hasProfileChange = input.fullName !== undefined;
+
+        return tx.user.update({
+          where: { id },
+          data: {
+            ...(input.email !== undefined ? { email: input.email } : {}),
+            ...(input.phone !== undefined ? { phone: input.phone } : {}),
+            ...(input.username !== undefined ? { username: input.username } : {}),
+            ...(input.status !== undefined ? { status: input.status } : {}),
+            ...(hasProfileChange
+              ? {
+                  profile: {
+                    upsert: {
+                      create: { fullName: input.fullName ?? null },
+                      update: { fullName: input.fullName ?? null },
+                    },
+                  },
+                }
+              : {}),
+          },
+          select: USER_SELECT,
+        });
+      });
+
+      return toPublicUser(row);
+    } catch (error) {
+      UserService.catchDuplicate(error);
+    }
+  }
+
+  /** Cập nhật hồ sơ của CHÍNH người đang đăng nhập. */
+  async updateProfile(userId: string, input: UpdateProfileInput): Promise<PublicUser> {
+    const existing = await this.db.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!existing) throw new UserNotFoundError(userId);
+
+    const data = {
+      ...(input.fullName !== undefined ? { fullName: input.fullName } : {}),
+      ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl } : {}),
+      ...(input.gender !== undefined ? { gender: input.gender } : {}),
+      ...(input.dob !== undefined ? { dob: input.dob } : {}),
+      ...(input.bio !== undefined ? { bio: input.bio } : {}),
+      ...(input.address !== undefined ? { address: input.address } : {}),
+      ...(input.city !== undefined ? { city: input.city } : {}),
+      ...(input.district !== undefined ? { district: input.district } : {}),
+      ...(input.country !== undefined ? { country: input.country } : {}),
+    };
+
+    await this.db.userProfile.upsert({
+      where: { userId },
+      create: { userId, ...data },
+      update: data,
+    });
+
+    const row = await this.db.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: USER_SELECT,
+    });
+    return toPublicUser(row);
+  }
+
+  /** Hồ sơ đầy đủ (mọi field của `UserProfile`), cho màn "trang cá nhân". */
+  async getProfile(userId: string) {
+    const row = await this.db.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { ...USER_SELECT, profile: true },
+    });
+    if (!row) throw new UserNotFoundError(userId);
+
+    const { profile, userRoles, ...rest } = row;
+    return {
+      ...rest,
+      roles: userRoles.map((item) => item.role.key),
+      profile: profile ?? null,
+      fullName: profile?.fullName ?? null,
+      avatarUrl: profile?.avatarUrl ?? null,
+    };
+  }
+
+  async setStatus(
+    id: string,
+    status: PublicUser["status"],
+    options: { actorId?: string | null } = {},
+  ): Promise<PublicUser> {
+    if (options.actorId && options.actorId === id) {
+      throw new SelfActionForbiddenError("đổi trạng thái");
+    }
+
+    const existing = await this.db.user.findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!existing) throw new UserNotFoundError(id);
+
+    const row = await this.db.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id },
+        data: {
+          status,
+          // Bỏ khoá tạm khi được mở lại: `lockedUntil` là hệ quả của brute-force
+          // mật khẩu, không liên quan tới quyết định hành chính vừa rồi. Giữ
+          // lại thì admin "mở khoá" xong người dùng vẫn không vào được.
+          ...(status === "ACTIVE" ? { lockedUntil: null, failedLoginAttempts: 0 } : {}),
+        },
+        select: USER_SELECT,
+      });
+
+      // Khoá tài khoản mà để phiên cũ còn sống thì việc khoá gần như vô nghĩa —
+      // họ vẫn dùng tiếp tới khi refresh token hết hạn (mặc định 30 ngày).
+      if (status !== "ACTIVE") {
+        await tx.refreshToken.updateMany({
+          where: { userId: id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+
+      return updated;
+    });
+
+    return toPublicUser(row);
+  }
+
+  /**
+   * Xoá MỀM.
+   *
+   * Không xoá cứng vì dữ liệu nghiệp vụ (đơn hàng, giao dịch, nhật ký) tham
+   * chiếu tới người dùng — xoá cứng là mất luôn ngữ cảnh của chúng, hoặc tệ
+   * hơn: cascade xoá theo cả những thứ phải giữ lại.
+   *
+   * Email/username/phone được gắn hậu tố để giải phóng ràng buộc unique —
+   * không có bước này thì địa chỉ email đó vĩnh viễn không ai đăng ký lại được,
+   * kể cả chính chủ.
+   */
+  async softDelete(id: string, options: { actorId?: string | null } = {}): Promise<void> {
+    if (options.actorId && options.actorId === id) {
+      throw new SelfActionForbiddenError("xoá");
+    }
+
+    const user = await this.db.user.findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true, email: true, username: true, phone: true },
+    });
+    if (!user) throw new UserNotFoundError(id);
+
+    const suffix = `deleted:${Date.now()}`;
+
+    await this.db.$transaction([
+      this.db.user.update({
+        where: { id },
+        data: {
+          deletedAt: new Date(),
+          status: "INACTIVE",
+          email: user.email ? `${user.email}:${suffix}` : null,
+          username: user.username ? `${user.username}:${suffix}` : null,
+          phone: user.phone ? `${user.phone}:${suffix}` : null,
+        },
+      }),
+      this.db.refreshToken.updateMany({
+        where: { userId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+  }
+
+  // -------------------------------------------------------------------------
+  // Quyền riêng của từng người (đè lên quyền đến từ vai trò)
+  // -------------------------------------------------------------------------
+
+  async setUserPermission(
+    userId: string,
+    permissionKey: string,
+    isGranted: boolean,
+    options: { actorId?: string | null } = {},
+  ): Promise<void> {
+    if (!isKnownPermission(permissionKey)) throw new UnknownPermissionError([permissionKey]);
+
+    const permission = await this.db.permission.findUnique({
+      where: { key: permissionKey },
+      select: { id: true },
+    });
+    // Quyền có trong code nhưng chưa có trong database = quên chạy `db:seed`.
+    if (!permission) throw new UnknownPermissionError([permissionKey]);
+
+    await this.db.userPermission.upsert({
+      where: { userId_permissionId: { userId, permissionId: permission.id } },
+      create: {
+        userId,
+        permissionId: permission.id,
+        isGranted,
+        grantedBy: options.actorId ?? null,
+      },
+      update: { isGranted, grantedBy: options.actorId ?? null },
     });
   }
 
-  async count(): Promise<number> {
-    return this.db.user.count();
-  }
+  /** Gỡ ngoại lệ, trả người dùng về đúng quyền của vai trò họ đang mang. */
+  async clearUserPermission(userId: string, permissionKey: string): Promise<void> {
+    const permission = await this.db.permission.findUnique({
+      where: { key: permissionKey },
+      select: { id: true },
+    });
+    if (!permission) return;
 
-  async findById(id: string): Promise<PublicUser | null> {
-    return this.db.user.findUnique({ where: { id }, select: PUBLIC_USER_FIELDS });
-  }
-}
-
-function isPrismaError(error: unknown, code: string): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
-}
-
-export class UserAlreadyExistsError extends Error {
-  constructor(email: string) {
-    super(`Email "${email}" đã được sử dụng`);
-    this.name = "UserAlreadyExistsError";
+    await this.db.userPermission.deleteMany({
+      where: { userId, permissionId: permission.id },
+    });
   }
 }

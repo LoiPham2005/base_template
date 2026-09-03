@@ -1,37 +1,399 @@
-// Prisma schema shared by every app. Only packages/core is allowed
-// to import the generated client (enforced by @repo/eslint-config).
+// Schema dùng chung cho toàn bộ monorepo.
+//
+// CHỈ packages/core được import Prisma Client (ràng buộc này do
+// @repo/eslint-config enforce trên apps/api và apps/web).
+//
+// Bố cục:
+//   1. RBAC        — Role / Permission / gán theo vai trò & theo từng người
+//   2. Người dùng  — User (chỉ phục vụ xác thực) + UserProfile (thông tin cá nhân)
+//   3. Phiên & token — OAuthAccount / RefreshToken / VerificationToken
+//   4. Thiết bị & thông báo
+//   5. Nhật ký kiểm toán
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  // Swap to "mysql" / "sqlite" / "mongodb" here if a project needs it —
-  // nothing outside this file depends on the provider.
+  // Đổi sang "mysql" / "sqlite" ở đây nếu dự án cần — không file nào ngoài
+  // file này phụ thuộc vào provider.
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-enum Role {
-  USER
-  ADMIN
-}
+// ============================================================
+// 1. PHÂN QUYỀN (RBAC): NHIỀU VAI TRÒ + QUYỀN CHI TIẾT
+// ============================================================
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  /// Argon2 hash. Null nghĩa là tài khoản chưa đặt mật khẩu (admin tạo hộ,
-  /// hoặc đăng nhập qua OAuth) — khác hẳn chuỗi rỗng, vốn là một mật khẩu
-  /// "hợp lệ" nhìn từ tầng dữ liệu.
-  password  String?
-  name      String?
-  role      Role     @default(USER)
+/// Vai trò. DANH SÁCH vai trò nằm trong database (quản trị viên tạo thêm được
+/// lúc chạy); DANH MỤC quyền thì nằm trong code (@repo/contracts) — xem ghi chú
+/// đầu file packages/contracts/src/permissions.ts để hiểu vì sao chia như vậy.
+model Role {
+  id          String  @id @default(cuid())
+  /// Mã cố định, viết HOA: SUPER_ADMIN, ADMIN, USER… Đây là thứ code so sánh,
+  /// còn `name` chỉ để hiển thị.
+  key         String  @unique
+  name        String
+  description String?
+  /// Vai trò cốt lõi — không cho xoá, không cho đổi key. Xoá vai trò đang được
+  /// gán cho người dùng là cách nhanh nhất để khoá toàn bộ hệ thống khỏi
+  /// chính người quản trị.
+  isSystem    Boolean @default(false)
+
+  permissions RolePermission[]
+  userRoles   UserRole[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Danh sách sắp xếp theo createdAt desc; không có index thì mỗi lần mở
-  // trang là một lần full table scan kèm sort.
+  @@map("roles")
+}
+
+/// Quyền hạn. Bảng này được ĐỒNG BỘ TỪ CODE bằng `pnpm db:seed` — đừng thêm
+/// dòng bằng tay, vì một quyền không có dòng mã nào kiểm tra thì tick vào cũng
+/// không thay đổi điều gì.
+model Permission {
+  id          String  @id @default(cuid())
+  /// Quy ước: `<tài-nguyên>:<hành-động>`, thêm `:own` khi chỉ áp dụng cho dữ
+  /// liệu của chính người đó. Ví dụ: `user:read`, `profile:update:own`.
+  key         String  @unique
+  name        String
+  /// Nhóm hiển thị trên màn phân quyền: "Quản lý Người dùng", "Đơn hàng"…
+  category    String
+  description String?
+
+  roles           RolePermission[]
+  userPermissions UserPermission[]
+
+  createdAt DateTime @default(now())
+
+  @@index([category])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+/// Một người có thể mang NHIỀU vai trò. Quyền cuối cùng là HỢP của mọi vai trò
+/// (rồi mới áp các dòng UserPermission bên dưới) — xem PermissionService.
+model UserRole {
+  userId String
+  roleId String
+  /// Ai đã gán vai trò này. Phục vụ điều tra khi có người bỗng dưng có quyền.
+  assignedBy String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+/// Ngoại lệ cho từng cá nhân, đè lên quyền đến từ vai trò.
+///
+/// `isGranted = false` (TƯỚC quyền) luôn THẮNG mọi vai trò. Đây là lựa chọn có
+/// chủ đích: cần chặn gấp một người khỏi một hành động thì phải chặn được ngay,
+/// không phải đi gỡ họ khỏi vai trò rồi dựng lại một vai trò gần giống.
+model UserPermission {
+  userId       String
+  permissionId String
+  isGranted    Boolean  @default(true)
+  grantedBy    String?
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, permissionId])
+  @@index([permissionId])
+  @@map("user_permissions")
+}
+
+// ============================================================
+// 2. NGƯỜI DÙNG
+// ============================================================
+
+enum UserStatus {
+  /// Đang hoạt động.
+  ACTIVE
+  /// Chưa kích hoạt hoặc tạm ngưng — đăng nhập được nhưng nên bị chặn ở tầng
+  /// nghiệp vụ nếu dự án yêu cầu xác thực email trước.
+  INACTIVE
+  /// Bị khoá do vi phạm. Chặn MỌI đường đăng nhập, kể cả OAuth.
+  BANNED
+}
+
+/// Bảng User cố tình giữ mỏng: CHỈ phục vụ xác thực và bảo mật.
+///
+/// Mọi thông tin cá nhân (tên, ảnh, địa chỉ…) nằm ở `UserProfile`. Tách ra vì
+/// bảng này bị đọc ở gần như mọi request xác thực, còn hồ sơ thì hiếm khi cần
+/// — và vì thông tin cá nhân là thứ chịu ràng buộc pháp lý (xoá theo yêu cầu,
+/// xuất dữ liệu), dễ xử lý hơn nhiều khi nó nằm gọn một chỗ.
+model User {
+  id       String  @id @default(cuid())
+  email    String? @unique
+  phone    String? @unique
+  username String? @unique
+  /// Hash Argon2id (hoặc bcrypt cũ, sẽ tự nâng cấp khi đăng nhập).
+  /// `null` = tài khoản chưa đặt mật khẩu: admin tạo hộ, hoặc chỉ đăng nhập
+  /// qua OAuth. Khác hẳn chuỗi rỗng — vốn là một mật khẩu "hợp lệ" nhìn từ
+  /// tầng dữ liệu.
+  password String?
+
+  status          UserStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
+  /// Số lần sai mật khẩu LIÊN TIẾP. Reset về 0 khi đăng nhập thành công.
+  failedLoginAttempts Int       @default(0)
+  /// Khoá tạm do brute-force, tự hết hạn. Khác `status = BANNED` (khoá tay).
+  lockedUntil         DateTime?
+  /// Xoá mềm. Mọi truy vấn xác thực phải lọc `deletedAt: null`.
+  deletedAt           DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile UserProfile?
+
+  userRoles       UserRole[]
+  userPermissions UserPermission[]
+
+  refreshTokens      RefreshToken[]
+  verificationTokens VerificationToken[]
+  oauthAccounts      OAuthAccount[]
+
+  devices       UserDevice[]
+  notifications NotificationRecipient[]
+
+  auditLogs AuditLog[] @relation("UserAuditLogs")
+
+  @@index([status])
   @@index([createdAt])
+  @@index([deletedAt])
   @@map("users")
 }
 
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+model UserProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  fullName  String?
+  avatarUrl String?
+  gender    Gender?
+  dob       DateTime? @db.Date
+  bio       String?
+  address   String?
+  city      String?
+  district  String?
+  country   String?   @default("VN")
+  /// Chỗ nhét thêm field riêng của từng dự án mà không phải viết migration.
+  /// Đừng lạm dụng: thứ gì cần lọc hoặc sắp xếp thì phải là cột thật.
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("user_profiles")
+}
+
+// ============================================================
+// 3. OAUTH, TOKEN & PHIÊN ĐĂNG NHẬP
+// ============================================================
+
+model OAuthAccount {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// google | github | facebook | apple
+  provider          String
+  providerAccountId String
+  createdAt         DateTime @default(now())
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("oauth_accounts")
+}
+
+/// Refresh token cho client mobile/SPA. Chỉ lưu SHA-256 — rò database không
+/// đồng nghĩa với rò phiên đăng nhập. Xem TokenService để hiểu cơ chế xoay
+/// vòng và phát hiện dùng lại.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId  String?
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  /// Đặt khi đăng xuất hoặc khi token bị xoay vòng.
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  device UserDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+enum VerificationTokenType {
+  EMAIL_VERIFICATION
+  PHONE_OTP
+  PASSWORD_RESET
+}
+
+/// Token dùng MỘT LẦN gửi qua email/SMS. Cũng chỉ lưu SHA-256.
+model VerificationToken {
+  id        String                @id @default(cuid())
+  tokenHash String                @unique
+  type      VerificationTokenType
+  userId    String
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime              @default(now())
+
+  @@index([userId, type])
+  @@index([expiresAt])
+  @@map("verification_tokens")
+}
+
+// ============================================================
+// 4. THIẾT BỊ & THÔNG BÁO
+// ============================================================
+
+enum DevicePlatform {
+  IOS
+  ANDROID
+  WEB
+}
+
+model UserDevice {
+  id         String         @id @default(cuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform   DevicePlatform
+  /// Token nhận push (FCM/APNs).
+  fcmToken   String
+  /// UUID phần cứng do client sinh, ổn định qua các lần cài lại app.
+  deviceId   String?
+  deviceName String?
+  isActive   Boolean        @default(true)
+  lastSeenAt DateTime       @default(now())
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  refreshTokens RefreshToken[]
+
+  @@unique([userId, fcmToken])
+  @@index([userId])
+  @@index([fcmToken])
+  @@map("user_devices")
+}
+
+enum NotificationType {
+  /// Gửi tới một số người cụ thể.
+  DIRECT
+  /// Gửi theo nhóm/chủ đề.
+  TOPIC
+  /// Gửi toàn hệ thống.
+  BROADCAST
+}
+
+/// Nội dung gốc: MỘT bản ghi dù gửi cho một triệu người.
+model Notification {
+  id        String           @id @default(cuid())
+  title     String
+  body      String
+  imageUrl  String?
+  type      NotificationType @default(DIRECT)
+  /// Điều hướng khi bấm: "/orders/123" hoặc URL tuyệt đối.
+  actionUrl String?
+  data      Json?
+  senderId  String?
+  createdAt DateTime         @default(now())
+
+  recipients NotificationRecipient[]
+
+  @@index([type, createdAt])
+  @@map("notifications")
+}
+
+/// Trạng thái nhận/đọc của từng người. Bảng này mới là thứ bị query liên tục
+/// (đếm số chưa đọc trên chuông), nên nó được giữ mỏng và đánh index kỹ.
+model NotificationRecipient {
+  id             String @id @default(cuid())
+  notificationId String
+  userId         String
+
+  isRead   Boolean   @default(false)
+  readAt   DateTime?
+  isPushed Boolean   @default(false)
+  pushedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notification_recipients")
+}
+
+// ============================================================
+// 5. NHẬT KÝ KIỂM TOÁN
+// ============================================================
+
+/// Ghi lại HÀNH ĐỘNG NHẠY CẢM, không phải mọi request.
+///
+/// Nguyên tắc: ghi những việc mà sau này sẽ có người hỏi "ai làm cái này?" —
+/// đổi quyền, khoá tài khoản, xoá dữ liệu, đổi mật khẩu người khác. Ghi tất cả
+/// mọi thứ thì bảng phình nhanh tới mức không ai tra nổi, tức là mất luôn tác
+/// dụng.
+model AuditLog {
+  id         String   @id @default(cuid())
+  /// null = hệ thống tự làm (cron, webhook).
+  actorId    String?
+  /// Chép lại email tại thời điểm đó: actor có thể bị xoá sau này, và nhật ký
+  /// mất danh tính là nhật ký vô dụng.
+  actorEmail String?
+  /// Quy ước: `<thực-thể>.<hành-động>` — "user.banned", "role.updated".
+  action     String
+  entity     String
+  entityId   String?
+  metadata   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation("UserAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([entity, entityId])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}

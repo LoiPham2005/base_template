@@ -14,19 +14,17 @@ export function UserForm() {
       style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}
     >
       <input name="email" type="email" placeholder="email" required />
-      <input name="name" placeholder="name (optional)" />
-      {/* Ô này trước đây không tồn tại, trong khi schema lại bắt buộc password
-          — nên form chưa bao giờ gửi thành công, và lỗi "password: Required"
-          cũng không có chỗ nào hiển thị. Nay password là tuỳ chọn: để trống
-          thì tài khoản được tạo mà chưa có mật khẩu. */}
+      <input name="fullName" placeholder="họ tên (tuỳ chọn)" />
+      {/* Để trống thì tài khoản được tạo mà CHƯA có mật khẩu — người dùng tự
+          đặt qua luồng "quên mật khẩu", vốn chấp nhận trường hợp này. */}
       <input
         name="password"
         type="password"
-        placeholder="password (tuỳ chọn, ≥8 ký tự)"
+        placeholder="mật khẩu (tuỳ chọn, ≥8 ký tự)"
         minLength={8}
       />
       <button type="submit" disabled={isPending}>
-        {isPending ? "Adding…" : "Add user"}
+        {isPending ? "Đang thêm…" : "Thêm người dùng"}
       </button>
 
       {state.error && <span style={{ color: "crimson" }}>{state.error}</span>}

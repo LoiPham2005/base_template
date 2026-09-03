@@ -5,7 +5,7 @@
     "build": {
       "dependsOn": ["^build"],
       "outputs": [".next/**", "!.next/cache/**", "dist/**"],
-      "env": ["NODE_ENV", "NEXT_TELEMETRY_DISABLED"]
+      "env": ["NODE_ENV", "NEXT_TELEMETRY_DISABLED", "SKIP_ENV_VALIDATION"]
     },
     "dev": {
       "dependsOn": ["^build"],
@@ -17,10 +17,45 @@
       "dependsOn": ["^build"]
     },
     "test": {
-      "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "dependsOn": ["^build"]
     }
   },
   "globalEnv": ["NODE_ENV"],
-  "globalPassThroughEnv": ["DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "API_URL", "PORT"]
+  "globalPassThroughEnv": [
+    "DATABASE_URL",
+    "DIRECT_DATABASE_URL",
+    "JWT_SECRET",
+    "CORS_ORIGIN",
+    "APP_URL",
+    "API_PUBLIC_URL",
+    "API_URL",
+    "PORT",
+    "REDIS_URL",
+    "QUEUE_ENABLED",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_SECURE",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+    "MAIL_FROM",
+    "S3_ENDPOINT",
+    "S3_REGION",
+    "S3_BUCKET",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+    "S3_FORCE_PATH_STYLE",
+    "S3_PUBLIC_URL",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "GITHUB_CLIENT_ID",
+    "GITHUB_CLIENT_SECRET",
+    "FACEBOOK_CLIENT_ID",
+    "FACEBOOK_CLIENT_SECRET",
+    "APPLE_CLIENT_ID",
+    "APPLE_TEAM_ID",
+    "APPLE_KEY_ID",
+    "APPLE_PRIVATE_KEY",
+    "ADMIN_EMAIL",
+    "ADMIN_PASSWORD"
+  ]
 }

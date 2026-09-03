@@ -1,17 +1,16 @@
 #!/usr/bin/env node
 /**
- * Automates the manual checklists in CONFIGURATIONS.md so switching
- * project configuration is one command instead of a hand-followed
- * checklist (error-prone — a forgotten step ships a subtly broken
- * project). See CONFIGURATIONS.md for what each config means and why.
+ * Cắt bớt bộ khung cho đúng quy mô dự án — bằng một lệnh, thay vì một checklist
+ * làm tay (làm tay thì sớm muộn cũng sót một bước, và bước sót đó ship lên
+ * production).
  *
- * Usage (from repo root):
- *   node scripts/scaffold.js <api-only|solo>          dry run, no changes
- *   node scripts/scaffold.js <api-only|solo> --yes     actually apply
+ * Cách dùng (chạy từ gốc repo):
+ *   node scripts/scaffold.js <api-only|no-worker>          chạy thử, không đổi gì
+ *   node scripts/scaffold.js <api-only|no-worker> --yes    thực thi thật
  *
- * Or via package.json:
+ * Hoặc qua package.json:
  *   pnpm scaffold:api-only        pnpm scaffold:api-only:apply
- *   pnpm scaffold:solo            pnpm scaffold:solo:apply
+ *   pnpm scaffold:no-worker       pnpm scaffold:no-worker:apply
  */
 
 const fs = require("fs");
@@ -22,6 +21,11 @@ const ROOT = path.resolve(__dirname, "..");
 const args = process.argv.slice(2);
 const mode = args[0];
 const apply = args.includes("--yes");
+
+const MODES = {
+  "api-only": "Xoá apps/web — dự án chỉ có API cho mobile/bên thứ ba",
+  "no-worker": "Xoá apps/worker và đặt QUEUE_ENABLED=0 — job chạy thẳng trong request",
+};
 
 function fail(msg) {
   console.error(`\n✖ ${msg}\n`);
@@ -37,15 +41,40 @@ if (
   );
 }
 
-if (!mode || !["api-only", "solo"].includes(mode)) {
+/*
+ * Cấu hình "solo" (Next.js gọi thẳng packages/core, không có apps/api) đã bị
+ * gỡ bỏ CÓ CHỦ ĐÍCH.
+ *
+ * Toàn bộ lớp xác thực và phân quyền giờ nằm ở apps/api: guard JWT, guard
+ * quyền, rate limit theo Redis, ánh xạ lỗi nghiệp vụ sang mã HTTP. Bỏ apps/api
+ * đi không phải là xoá một thư mục — đó là viết lại tất cả những thứ đó bằng
+ * middleware và Server Action của Next.js.
+ *
+ * Nếu dự án của bạn thật sự chỉ cần một app Next.js duy nhất, hãy bắt đầu từ
+ * repo `nextjs_base` — nó được dựng sẵn theo đúng hình dạng đó.
+ */
+if (mode === "solo") {
   fail(
     [
-      "Usage: node scripts/scaffold.js <api-only|solo> [--yes]",
+      'Cấu hình "solo" không còn được hỗ trợ ở base_template.',
       "",
-      "  api-only   Xoá apps/web — chỉ giữ apps/api (CONFIGURATIONS.md, cấu hình B)",
-      "  solo       Xoá apps/api, web gọi thẳng packages/core (CONFIGURATIONS.md, cấu hình C)",
+      "Lý do: xác thực, phân quyền, rate limit và ánh xạ lỗi đều nằm ở apps/api.",
+      "Bỏ apps/api đi là phải viết lại toàn bộ những thứ đó trong Next.js — không",
+      "phải một checklist, mà là một lần dựng lại.",
       "",
-      "Không có --yes: chỉ in ra sẽ làm gì (dry run), không đổi gì cả.",
+      "Chỉ cần MỘT app Next.js? Bắt đầu từ repo `nextjs_base` thay vì cắt repo này.",
+    ].join("\n"),
+  );
+}
+
+if (!mode || !(mode in MODES)) {
+  fail(
+    [
+      "Usage: node scripts/scaffold.js <chế-độ> [--yes]",
+      "",
+      ...Object.entries(MODES).map(([key, description]) => `  ${key.padEnd(11)} ${description}`),
+      "",
+      "Không có --yes: chỉ in ra sẽ làm gì (chạy thử), không đổi gì cả.",
     ].join("\n"),
   );
 }
@@ -61,8 +90,9 @@ function isGitRepo() {
 
 function hasUncommittedChanges(relPath) {
   try {
-    const out = execSync(`git status --porcelain -- "${relPath}"`, { cwd: ROOT }).toString().trim();
-    return out.length > 0;
+    return (
+      execSync(`git status --porcelain -- "${relPath}"`, { cwd: ROOT }).toString().trim().length > 0
+    );
   } catch {
     return false;
   }
@@ -70,7 +100,6 @@ function hasUncommittedChanges(relPath) {
 
 const actions = [];
 const rm = (relPath) => actions.push({ type: "rm", path: relPath });
-const write = (relPath, content) => actions.push({ type: "write", path: relPath, content });
 const editJson = (relPath, mutate) => actions.push({ type: "editJson", path: relPath, mutate });
 const warn = (msg) => actions.push({ type: "warn", msg });
 
@@ -80,142 +109,39 @@ if (mode === "api-only") {
     delete pkg.scripts["dev:web"];
     return pkg;
   });
-}
-
-if (mode === "solo") {
-  rm("apps/api");
-  rm("apps/web/lib/api.ts");
-
-  editJson("apps/web/package.json", (pkg) => {
-    pkg.dependencies["@repo/core"] = "workspace:*";
-    pkg.dependencies["@repo/db"] = "workspace:*";
-    return pkg;
-  });
-
-  write(
-    "apps/web/next.config.mjs",
-    `/** @type {import('next').NextConfig} */
-const nextConfig = {
-  // Lets Next.js trace and bundle workspace packages correctly in
-  // standalone builds (needed once you deploy outside Vercel).
-  transpilePackages: ["@repo/core", "@repo/contracts"],
-  typedRoutes: true,
-};
-
-export default nextConfig;
-`,
-  );
-
-  write(
-    "apps/web/eslint.config.js",
-    `const base = require("@repo/eslint-config");
-
-module.exports = [...base, base.noDirectDbImport];
-`,
-  );
-
-  write(
-    "apps/web/.env.example",
-    `DATABASE_URL="postgresql://postgres:postgres@localhost:5432/base_template?schema=public"
-`,
-  );
-
-  write(
-    "apps/web/app/users/page.tsx",
-    `import { core } from "@repo/core";
-import { UserForm } from "./user-form";
-
-// Mutable, per-request data — never statically prerendered at build time.
-export const dynamic = "force-dynamic";
-
-// Server Component — calls the core service directly, in-process.
-// Valid only because this project has no other client (mobile/3rd-party)
-// hitting the same data; see CONFIGURATIONS.md.
-export default async function UsersPage() {
-  const users = await core.user.list();
-
-  return (
-    <main style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
-      <h1>Users</h1>
-      <UserForm />
-      <ul>
-        {users.map((user) => (
-          <li key={user.id}>
-            {user.email} {user.name ? \`— \${user.name}\` : ""}
-          </li>
-        ))}
-      </ul>
-      {users.length === 0 && <p>No users yet.</p>}
-    </main>
+  warn("Gỡ luôn service `web` khỏi docker-compose.yml và khối reverse proxy trong Caddyfile.");
+  warn(
+    "Link trong email vẫn trỏ tới APP_URL (trang web). Không còn web thì hãy đổi " +
+      "WEB_ROUTES trong packages/core/src/infra/emails.ts sang deep link của app mobile.",
   );
 }
-`,
-  );
 
-  write(
-    "apps/web/app/users/actions.ts",
-    `"use server";
-
-import { revalidatePath } from "next/cache";
-import { core, UserAlreadyExistsError } from "@repo/core";
-import { createUserSchema } from "@repo/contracts";
-
-export type CreateUserState = {
-  error?: string;
-  fieldErrors?: Record<string, string[]>;
-};
-
-export async function createUserAction(
-  _prevState: CreateUserState,
-  formData: FormData,
-): Promise<CreateUserState> {
-  const parsed = createUserSchema.safeParse({
-    email: formData.get("email"),
-    name: formData.get("name") || undefined,
-  });
-
-  if (!parsed.success) {
-    return { fieldErrors: parsed.error.flatten().fieldErrors };
-  }
-
-  try {
-    // Server Action calls the core service directly, in the same
-    // process — no HTTP round-trip, no separate apps/api needed.
-    await core.user.create(parsed.data);
-  } catch (err) {
-    if (err instanceof UserAlreadyExistsError) {
-      return { error: err.message };
-    }
-    throw err;
-  }
-
-  revalidatePath("/users");
-  return {};
-}
-`,
-  );
-
+if (mode === "no-worker") {
+  rm("apps/worker");
   editJson("package.json", (pkg) => {
-    delete pkg.scripts["dev:api"];
+    delete pkg.scripts["dev:worker"];
     return pkg;
   });
-
-  if (fs.existsSync(path.join(ROOT, "apps/web/.env"))) {
-    warn(
-      "apps/web/.env đã tồn tại và có thể chứa giá trị thật — script KHÔNG tự sửa file này. " +
-        "Tự tay: xoá API_URL, thêm DATABASE_URL.",
-    );
-  }
+  warn("Gỡ service `worker` khỏi docker-compose.yml.");
+  warn(
+    "ĐẶT QUEUE_ENABLED=0 trong .env. Bỏ qua bước này là app vẫn đẩy job vào Redis " +
+      "trong khi không còn worker nào chạy — job nằm đó mãi, email không bao giờ được " +
+      "gửi, và không một dòng log nào báo.",
+  );
+  warn(
+    "Đổi lại: mất THỬ LẠI TỰ ĐỘNG. Một lần SMTP nghẽn sẽ bung thẳng ra request thay " +
+      "vì được chạy lại sau vài giây.",
+  );
 }
 
-console.log(`\n${apply ? "Thực thi" : "[DRY RUN]"} cấu hình "${mode}":\n`);
+console.log(`\n${apply ? "Thực thi" : "[CHẠY THỬ]"} cấu hình "${mode}":\n`);
 
 if (apply && isGitRepo()) {
   const dirty = actions.filter((a) => a.type === "rm" && hasUncommittedChanges(a.path));
   if (dirty.length > 0) {
     fail(
       `Có thay đổi chưa commit trong: ${dirty.map((a) => a.path).join(", ")}\n` +
-        "Commit hoặc stash trước khi chạy scaffold --yes (script này sẽ xoá thư mục đó vĩnh viễn).",
+        "Commit hoặc stash trước khi chạy --yes (script này xoá thư mục đó vĩnh viễn).",
     );
   }
 }
@@ -232,18 +158,11 @@ for (const action of actions) {
     const exists = fs.existsSync(full);
     console.log(`  ${exists ? "rm -rf" : "(bỏ qua, không tồn tại)"} ${action.path}`);
     if (apply && exists) fs.rmSync(full, { recursive: true, force: true });
-  } else if (action.type === "write") {
-    console.log(`  write   ${action.path}`);
-    if (apply) {
-      fs.mkdirSync(path.dirname(full), { recursive: true });
-      fs.writeFileSync(full, action.content, "utf8");
-    }
   } else if (action.type === "editJson") {
     console.log(`  edit    ${action.path}`);
     if (apply) {
       const json = JSON.parse(fs.readFileSync(full, "utf8"));
-      const next = action.mutate(json);
-      fs.writeFileSync(full, JSON.stringify(next, null, 2) + "\n", "utf8");
+      fs.writeFileSync(full, `${JSON.stringify(action.mutate(json), null, 2)}\n`, "utf8");
     }
   }
 }
@@ -251,10 +170,5 @@ for (const action of actions) {
 if (!apply) {
   console.log(`\nChạy lại kèm --yes để thực thi thật:\n  node scripts/scaffold.js ${mode} --yes\n`);
 } else {
-  console.log(
-    `\nXong. Tiếp theo:\n  pnpm install\n` +
-      (mode === "solo"
-        ? `  cp packages/db/.env.example apps/web/.env   # rồi sửa DATABASE_URL\n  pnpm db:migrate\n  pnpm dev:web\n`
-        : `  cp packages/db/.env.example packages/db/.env\n  cp apps/api/.env.example apps/api/.env\n  pnpm db:migrate\n  pnpm dev:api\n`),
-  );
+  console.log("\nXong. Tiếp theo:\n  pnpm install\n  pnpm build\n");
 }

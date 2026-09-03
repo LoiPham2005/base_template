@@ -1,23 +1,61 @@
-import { Module } from "@nestjs/common";
+import { Global, Module } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
-import { core, AuthService } from "@repo/core";
-import { AuthController } from "./auth.controller";
-import { JwtAuthGuard } from "./jwt-auth.guard";
-import { RolesGuard } from "./roles.guard";
+import {
+  AuditService,
+  AuthService,
+  OAuthService,
+  PermissionService,
+  TokenService,
+  UserService,
+  core,
+} from "@repo/core";
 import { env } from "../env";
+import { AuthController } from "./auth.controller";
+import { OAuthController } from "./oauth.controller";
+import { SessionService } from "./session.service";
 
+/**
+ * `@Global()` vì `PermissionsGuard` chạy toàn cục và cần `PermissionService`.
+ *
+ * Không có nó thì mọi module đều phải import lại `AuthModule` chỉ để một guard
+ * toàn cục hoạt động — một thứ lặp lại ở khắp nơi mà không nói lên điều gì.
+ *
+ * ---
+ * VÌ SAO `useValue: core.x` CHỨ KHÔNG PHẢI `useClass`
+ *
+ * Service thật đã được khởi tạo sẵn trong `container.ts` của `@repo/core`, nối
+ * với đúng một instance Prisma. Để NestJS tự `new` chúng là tạo ra một bộ thứ
+ * hai — và `apps/worker` (không chạy NestJS) sẽ dùng bộ khác với `apps/api`.
+ */
+@Global()
 @Module({
   imports: [
     JwtModule.register({
       secret: env.JWT_SECRET,
-      // JWT_EXPIRES_IN là chuỗi tự do ("7d", "15m"); kiểu của @nestjs/jwt là
-      // union hẹp nên phải khẳng định kiểu. Dùng ép kiểu có tên thay vì `any`
-      // để không vô tình tắt kiểm tra cho cả object.
-      signOptions: { expiresIn: env.JWT_EXPIRES_IN as `${number}${"s" | "m" | "h" | "d"}` },
+      // Hạn được truyền ở từng lần ký (`SessionService`, `OAuthController`) vì
+      // access token, `state` của OAuth và mã trao đổi có hạn rất khác nhau.
+      // Đặt mặc định ở đây chỉ tạo ảo giác rằng chúng giống nhau.
     }),
   ],
-  controllers: [AuthController],
-  providers: [{ provide: AuthService, useValue: core.auth }, JwtAuthGuard, RolesGuard],
-  exports: [JwtAuthGuard, RolesGuard, JwtModule],
+  controllers: [AuthController, OAuthController],
+  providers: [
+    SessionService,
+    { provide: AuthService, useValue: core.auth },
+    { provide: UserService, useValue: core.user },
+    { provide: TokenService, useValue: core.token },
+    { provide: PermissionService, useValue: core.permission },
+    { provide: OAuthService, useValue: core.oauth },
+    { provide: AuditService, useValue: core.audit },
+  ],
+  exports: [
+    JwtModule,
+    SessionService,
+    AuthService,
+    UserService,
+    TokenService,
+    PermissionService,
+    OAuthService,
+    AuditService,
+  ],
 })
 export class AuthModule {}

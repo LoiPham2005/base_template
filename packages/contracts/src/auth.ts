@@ -1,24 +1,117 @@
 import { z } from "zod";
-import { passwordSchema, userSchema } from "./user";
+import {
+  emailSchema,
+  fullNameSchema,
+  passwordSchema,
+  publicUserSchema,
+  usernameSchema,
+} from "./user";
+import { emptyToUndefined } from "./common";
 
 export const loginSchema = z.object({
-  email: z.string().email("Email không hợp lệ"),
-  // Đăng nhập chỉ cần "có nhập gì đó". Áp luật độ dài ở đây là vô nghĩa với
-  // tài khoản cũ đặt mật khẩu từ trước khi luật đổi — và nó còn tiết lộ luật
-  // mật khẩu cho người đang dò.
+  /**
+   * Một ô nhập duy nhất cho cả email lẫn tên đăng nhập.
+   *
+   * Không tách hai trường vì người dùng không nhớ mình đã đăng ký bằng đường
+   * nào. `AuthService` phân biệt bằng ký tự `@` — thứ mà `usernameSchema` cấm.
+   */
+  identifier: z.string().trim().min(1, "Vui lòng nhập email hoặc tên đăng nhập"),
+  /**
+   * Chỉ yêu cầu "có nhập gì đó". Áp luật độ dài ở đây vừa vô nghĩa với tài
+   * khoản đặt mật khẩu từ trước khi luật đổi, vừa tiết lộ luật mật khẩu cho
+   * người đang dò.
+   */
   password: z.string().min(1, "Vui lòng nhập mật khẩu"),
 });
 export type LoginInput = z.infer<typeof loginSchema>;
 
 export const registerSchema = z.object({
-  email: z.string().email("Email không hợp lệ"),
+  email: emailSchema,
   password: passwordSchema,
-  name: z.string().min(1, "Tên không được để trống").max(100).optional(),
+  username: emptyToUndefined(usernameSchema.optional()),
+  fullName: emptyToUndefined(fullNameSchema.optional()),
 });
 export type RegisterInput = z.infer<typeof registerSchema>;
 
-export const authResponseSchema = z.object({
+export const refreshSchema = z.object({
+  refreshToken: z.string().min(1, "Thiếu refresh token"),
+});
+export type RefreshInput = z.infer<typeof refreshSchema>;
+
+export const forgotPasswordSchema = z.object({ email: emailSchema });
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1, "Thiếu mã đặt lại mật khẩu"),
+  password: passwordSchema,
+});
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, "Vui lòng nhập mật khẩu hiện tại"),
+    newPassword: passwordSchema,
+  })
+  // Đổi sang đúng mật khẩu cũ là thao tác vô nghĩa, và nó thường có nghĩa là
+  // người dùng hiểu nhầm form — nói thẳng còn hơn báo "đổi thành công".
+  .refine((value) => value.currentPassword !== value.newPassword, {
+    message: "Mật khẩu mới phải khác mật khẩu hiện tại",
+    path: ["newPassword"],
+  });
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
+export const verifyEmailSchema = z.object({
+  token: z.string().min(1, "Thiếu mã xác thực"),
+});
+export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+
+export const resendVerificationSchema = z.object({ email: emailSchema });
+export type ResendVerificationInput = z.infer<typeof resendVerificationSchema>;
+
+/**
+ * Cặp token trả về sau login/register/refresh.
+ *
+ * Gom vào một hình dạng duy nhất để client (web, Flutter, 3rd-party) chỉ phải
+ * viết MỘT model — ba endpoint trả ba hình dạng khác nhau là lỗi thiết kế API
+ * phổ biến nhất mà cũng tốn công nhất để sửa về sau.
+ */
+export const tokenPairSchema = z.object({
   accessToken: z.string(),
-  user: userSchema,
+  /** Số giây còn lại của access token — client chủ động refresh trước hạn. */
+  expiresIn: z.number(),
+  tokenType: z.literal("Bearer"),
+  refreshToken: z.string(),
+  refreshExpiresAt: z.string(),
+  /**
+   * Id của phiên vừa cấp. KHÔNG phải bí mật (token thật đã băm SHA-256 trước
+   * khi lưu) — client giữ lại để đánh dấu "thiết bị này" trên màn quản lý
+   * phiên. Đổi sau MỖI lần refresh vì refresh token xoay vòng.
+   */
+  sessionId: z.string(),
+});
+export type TokenPair = z.infer<typeof tokenPairSchema>;
+
+export const authResponseSchema = z.object({
+  user: publicUserSchema,
+  tokens: tokenPairSchema,
 });
 export type AuthResponse = z.infer<typeof authResponseSchema>;
+
+/** Một phiên còn hiệu lực, cho màn "thiết bị đang đăng nhập". */
+export const activeSessionSchema = z.object({
+  id: z.string(),
+  userAgent: z.string().nullable(),
+  ip: z.string().nullable(),
+  createdAt: z.coerce.date(),
+  expiresAt: z.coerce.date(),
+  /** `true` nếu đây chính là phiên đang gọi request này. */
+  current: z.boolean(),
+});
+export type ActiveSession = z.infer<typeof activeSessionSchema>;
+
+export const OAUTH_PROVIDERS = ["google", "github", "facebook", "apple"] as const;
+export type OAuthProviderId = (typeof OAUTH_PROVIDERS)[number];
+
+export function isOAuthProviderId(value: string): value is OAuthProviderId {
+  return (OAUTH_PROVIDERS as readonly string[]).includes(value);
+}

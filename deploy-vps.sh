@@ -83,6 +83,28 @@ if [ -d "apps/api" ]; then
     cd ../..
 fi
 
+# Check và reload Worker (nếu có)
+#
+# Bỏ qua khi QUEUE_ENABLED=0: lúc đó job chạy thẳng trong request, và dựng thêm
+# một tiến trình ngồi chờ hàng đợi rỗng vừa tốn RAM vừa trông y như đang hoạt
+# động bình thường.
+if [ -d "apps/worker" ]; then
+    QUEUE_ENABLED_VALUE="${QUEUE_ENABLED:-1}"
+    if [ "$QUEUE_ENABLED_VALUE" = "0" ]; then
+        log_warning "QUEUE_ENABLED=0 — bỏ qua apps/worker (job chạy thẳng trong request)."
+        pm2 delete worker >/dev/null 2>&1 || true
+    else
+        log_info "Reloading apps/worker..."
+        cd apps/worker
+        if pm2 describe worker > /dev/null 2>&1; then
+            pm2 reload ecosystem.config.js --env production
+        else
+            pm2 start ecosystem.config.js --env production
+        fi
+        cd ../..
+    fi
+fi
+
 # Check và reload Web (nếu có)
 if [ -d "apps/web" ]; then
     log_info "Reloading apps/web..."
@@ -112,7 +134,7 @@ fi
 # Không có bước này thì script in "THÀNH CÔNG" ngay cả khi app crash lúc khởi
 # động — PM2 vẫn báo đã start, còn tiến trình thì đang restart vòng lặp.
 log_info "8/8. Kiểm tra sức khoẻ..."
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/health}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/api/v1/health}"
 
 for attempt in $(seq 1 30); do
     if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then

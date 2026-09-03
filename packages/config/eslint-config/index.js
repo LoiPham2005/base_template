@@ -34,6 +34,22 @@ module.exports = [
         },
       ],
       "@typescript-eslint/no-explicit-any": "warn",
+
+      /*
+       * `console.*` bị cấm ở mã ứng dụng.
+       *
+       * Không phải chuyện thẩm mỹ: `console.log` ghi ra chuỗi tự do, còn hệ
+       * thống thu log (Loki/Datadog/CloudWatch) cần JSON một dòng để lọc và
+       * cảnh báo. Một dòng `console.log` lọt vào production là một dòng không
+       * ai tìm lại được, và tệ hơn — nó không đi qua bộ che dữ liệu nhạy cảm
+       * của `logger`, nên rất dễ thành một lần rò mật khẩu vào log.
+       *
+       * Dùng `logger` từ `@repo/core`. Hai ngoại lệ hợp lệ đã được đánh dấu
+       * tường minh bằng `eslint-disable`: chính bản thân `logger`, và
+       * `observability` (không được gọi ngược lại logger, sẽ thành vòng lặp).
+       * Script chạy tay (seed, CLI) thì tắt rule này ở cấu hình riêng.
+       */
+      "no-console": "error",
     },
   },
   prettier,

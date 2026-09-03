@@ -1,7 +1,15 @@
 # `version:` đã bị Compose v2 bỏ và chỉ sinh cảnh báo nếu còn giữ.
+#
+# Chạy toàn bộ:      docker compose up -d
+# Chỉ hạ tầng (dev): docker compose up -d postgres redis mailpit
+#
+# Biến đọc từ file `.env` ở cùng thư mục — xem `.env.example`.
 
-x-database-url: &database-url
+x-app-env: &app-env
   DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-base_template}?schema=public}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+  QUEUE_ENABLED: ${QUEUE_ENABLED:-1}
+  NODE_ENV: production
 
 services:
   postgres:
@@ -23,9 +31,41 @@ services:
       timeout: 5s
       retries: 10
 
-  # Chạy một lần rồi thoát; `api` đợi nó kết thúc thành công.
-  # Trước đây KHÔNG có service này: schema không bao giờ được áp, nên database
-  # rỗng vĩnh viễn và mọi query đều lỗi ngay từ request đầu tiên.
+  redis:
+    image: redis:7-alpine
+    container_name: base_template_redis
+    restart: unless-stopped
+    # `appendonly yes`: hàng đợi job nằm trong Redis. Không bật ghi bền thì
+    # restart container là mất mọi job đang chờ — email chưa gửi biến mất mà
+    # không dòng log nào báo.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Máy chủ SMTP giả cho DEV: bắt mọi email và hiện trên giao diện web ở
+  # http://localhost:8025 — không thư nào ra Internet thật.
+  #
+  # Chỉ chạy khi gọi tên hoặc `--profile dev`, để `docker compose up -d` trên
+  # production không vô tình dựng nó.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: base_template_mailpit
+    restart: unless-stopped
+    profiles: ["dev"]
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  # Chạy MỘT LẦN rồi thoát; `api` và `worker` đợi nó kết thúc thành công.
+  # Không có service này thì schema không bao giờ được áp, database rỗng vĩnh
+  # viễn, và mọi query lỗi ngay từ request đầu tiên.
   migrate:
     build:
       context: .
@@ -39,7 +79,7 @@ services:
       - path: .env
         required: false
     environment:
-      <<: *database-url
+      <<: *app-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,20 +94,22 @@ services:
       - path: .env
         required: false
     environment:
-      <<: *database-url
-      NODE_ENV: production
+      <<: *app-env
       PORT: 3001
-      # BẮT BUỘC. Không có giá trị mặc định là chủ ý: thiếu thì container dừng
-      # ngay kèm thông báo rõ ràng. Bản trước không truyền biến này xuống, nên
-      # API âm thầm ký JWT bằng khoá mặc định nằm công khai trong mã nguồn.
+      # BẮT BUỘC, không có mặc định: thiếu thì container dừng ngay kèm thông
+      # báo rõ ràng, thay vì âm thầm ký JWT bằng một khoá ai cũng biết.
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET là bắt buộc — sinh bằng openssl rand -base64 48}
       CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN là bắt buộc trên production}
-    # Cố ý KHÔNG publish cổng 3001 ra ngoài: chỉ `web` và reverse proxy cần
-    # gọi API. Mở ra Internet là đi vòng qua cả TLS lẫn rate limit của proxy.
+      APP_URL: ${APP_URL:?APP_URL là bắt buộc — dùng cho link trong email và callback OAuth}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-}
+    # Cố ý KHÔNG publish cổng 3001: chỉ `web` và reverse proxy cần gọi API. Mở
+    # ra Internet là đi vòng qua cả TLS lẫn rate limit của proxy.
     expose:
       - "3001"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -77,11 +119,51 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:3001/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 5s
       start_period: 20s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-env
+      WORKER_HEALTH_PORT: 3002
+      APP_URL: ${APP_URL:?APP_URL là bắt buộc — worker dựng link trong email}
+    # `QUEUE_ENABLED=0` là container này KHÔNG được dựng, và `docker compose
+    # up -d` sẽ GỠ nó nếu đang chạy. Dùng chung một biến với app là để không
+    # bao giờ có chuyện app đẩy job vào Redis trong khi không worker nào chạy.
+    deploy:
+      replicas: ${QUEUE_ENABLED:-1}
+    # Job đang chạy dở cần thời gian hoàn tất. Mặc định Docker chỉ đợi 10 giây
+    # rồi SIGKILL — cắt ngang một job đã trừ tiền nhưng chưa ghi nhận.
+    stop_grace_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
       retries: 3
 
   web:
@@ -114,3 +196,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:

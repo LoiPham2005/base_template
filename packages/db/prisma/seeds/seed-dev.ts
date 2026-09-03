@@ -1,0 +1,58 @@
+import type { PrismaClient } from "@prisma/client";
+import { SYSTEM_ROLES } from "@repo/contracts";
+import { hash } from "@node-rs/argon2";
+
+/**
+ * Dữ liệu mẫu cho môi trường DEV.
+ *
+ * KHÔNG BAO GIỜ chạy trên production — mật khẩu ở đây nằm công khai trong mã
+ * nguồn. `seed.ts` chặn điều đó bằng `NODE_ENV`.
+ */
+const DEV_PASSWORD = "matkhau123";
+
+const DEV_USERS = [
+  { email: "admin@dev.local", fullName: "Quản trị viên Dev", role: SYSTEM_ROLES.ADMIN },
+  { email: "manager@dev.local", fullName: "Quản lý Dev", role: SYSTEM_ROLES.MANAGER },
+  { email: "staff@dev.local", fullName: "Nhân viên Dev", role: SYSTEM_ROLES.STAFF },
+  { email: "user@dev.local", fullName: "Người dùng Dev", role: SYSTEM_ROLES.USER },
+];
+
+export async function seedDev(prisma: PrismaClient): Promise<void> {
+  // Băm MỘT LẦN rồi dùng lại cho cả bốn tài khoản: Argon2id cố tình tốn ~100ms
+  // mỗi lần, và ở đây tất cả đều dùng chung một mật khẩu nên băm lại là lãng
+  // phí thuần tuý.
+  const password = await hash(DEV_PASSWORD, {
+    algorithm: 2,
+    memoryCost: 19456,
+    timeCost: 2,
+    parallelism: 1,
+  });
+
+  for (const item of DEV_USERS) {
+    const role = await prisma.role.findUniqueOrThrow({
+      where: { key: item.role },
+      select: { id: true },
+    });
+
+    const user = await prisma.user.upsert({
+      where: { email: item.email },
+      update: {},
+      create: {
+        email: item.email,
+        password,
+        emailVerifiedAt: new Date(),
+        status: "ACTIVE",
+        profile: { create: { fullName: item.fullName } },
+      },
+      select: { id: true },
+    });
+
+    await prisma.userRole.upsert({
+      where: { userId_roleId: { userId: user.id, roleId: role.id } },
+      update: {},
+      create: { userId: user.id, roleId: role.id },
+    });
+  }
+
+  console.log(`✓ Đã tạo ${DEV_USERS.length} tài khoản dev (mật khẩu chung: ${DEV_PASSWORD})`);
+}

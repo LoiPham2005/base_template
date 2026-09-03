@@ -38,10 +38,27 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # Redis thật để bước seed/migrate chạy đúng đường đi của production
+      # (cache và rate limit dùng chung), thay vì âm thầm rơi về bản RAM.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/base_template_test?schema=public
+      REDIS_URL: redis://localhost:6379
       JWT_SECRET: ci-jwt-secret-must-be-at-least-32-characters-long
       CORS_ORIGIN: "*"
+      APP_URL: http://localhost:3000
+      # Job chạy thẳng trong tiến trình: CI không dựng worker, và một job bị
+      # đẩy vào Redis rồi không ai xử lý sẽ làm bước seed treo.
+      QUEUE_ENABLED: "0"
 
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +88,11 @@ jobs:
 
       - name: Apply migrations
         run: pnpm db:deploy
+
+      # Seed là một phần của mọi lần deploy (xem deploy-vps.sh), nên nó phải
+      # được kiểm ở CI. Một seed hỏng chỉ lộ ra lúc deploy thì đã quá muộn.
+      - name: Seed (quyền + vai trò hệ thống)
+        run: pnpm db:seed
 
       - name: Format check
         run: pnpm prettier --check "**/*.{ts,tsx,md,json,yml,yaml}"
@@ -109,7 +131,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [api, web]
+        app: [api, worker, web]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

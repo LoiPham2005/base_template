@@ -12,8 +12,11 @@ generator client {
 datasource db {
   // Đổi provider ở đây — không file nào khác phụ thuộc vào nó.
   // ⚠️ Trừ các partial unique index trong migration init: đó là cú pháp Postgres.
+  //
+  // Prisma 7 bỏ `url` khỏi khối này. Chuỗi kết nối giờ nằm ở hai chỗ tách bạch:
+  //   - prisma.config.ts        → cho CLI và Migrate
+  //   - driver adapter trong src/index.ts → cho runtime của ứng dụng
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ============================================================

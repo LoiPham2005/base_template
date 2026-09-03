@@ -11,7 +11,9 @@ import {
   resendVerificationSchema,
   resetPasswordSchema,
   updateProfileSchema,
+  requestPhoneOtpSchema,
   verifyEmailSchema,
+  verifyPhoneOtpSchema,
   verifyTwoFactorSchema,
 } from "@repo/contracts";
 
@@ -39,3 +41,5 @@ export class AssignRolesDto extends createZodDto(assignRolesSchema) {}
 export class VerifyTwoFactorDto extends createZodDto(verifyTwoFactorSchema) {}
 export class RequestEmailChangeDto extends createZodDto(requestEmailChangeSchema) {}
 export class ConfirmEmailChangeDto extends createZodDto(confirmEmailChangeSchema) {}
+export class RequestPhoneOtpDto extends createZodDto(requestPhoneOtpSchema) {}
+export class VerifyPhoneOtpDto extends createZodDto(verifyPhoneOtpSchema) {}

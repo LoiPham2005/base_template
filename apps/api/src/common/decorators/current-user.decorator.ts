@@ -48,6 +48,13 @@ export type CurrentUserPayload = {
    * nhạy cảm (chuyển tiền, xoá dữ liệu) nếu lần xác thực gần nhất đã quá lâu.
    */
   mfa?: string;
+  /**
+   * `iat` — thời điểm cấp token, giây epoch. Do `jsonwebtoken` tự thêm.
+   *
+   * `JwtAuthGuard` so nó với `User.passwordChangedAt` để đá token cũ ra NGAY
+   * khi mật khẩu đổi, thay vì chờ hết 15 phút.
+   */
+  iat?: number;
 };
 
 /** Vé trung gian: mật khẩu đã đúng, còn thiếu mã 2FA. */

@@ -66,6 +66,12 @@ async list(@Query() query: ListOrdersDto): Promise<Paginated<Order>> {
 - **Thao tác lên người dùng phải truyền `actorId`.** Đó là thứ kích hoạt chốt
   chặn bậc quyền lực (`Role.level`). Bỏ trống = coi như hệ thống tự làm và
   KHÔNG kiểm — chỉ đúng cho seed/cron.
+- **SMS TỐN TIỀN.** Mọi đường gửi SMS mới phải đi qua ba lớp chặn như
+  `requestPhoneVerification`: rate limit IP · giãn cách theo SỐ · trần theo
+  ngày theo SỐ. Khoá theo `userId` là vô dụng — kẻ tấn công tạo được nhiều tài
+  khoản, số nạn nhân thì chỉ có một.
+- **Đổi mật khẩu phải ghi `passwordChangedAt` VÀ gọi `securityStamp.invalidate()`.**
+  Thiếu vế hai thì hiệu lực trễ tới 5 phút.
 - **`Role.level` đồng bộ từ code**, không sửa qua giao diện cho vai trò hệ
   thống. Nó là ràng buộc bảo mật, không phải nhãn hiển thị.
 

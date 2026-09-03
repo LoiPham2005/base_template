@@ -1,4 +1,5 @@
 import type { MailMessage } from "../infra/mailer";
+import type { SmsMessage } from "../infra/smser";
 
 /**
  * Danh mục job và hình dạng payload của từng loại.
@@ -28,6 +29,15 @@ import type { MailMessage } from "../infra/mailer";
 export type JobPayloads = {
   /** Gửi một email. Lý do phổ biến nhất để cần hàng đợi. */
   "email:send": MailMessage;
+
+  /**
+   * Gửi một SMS.
+   *
+   * ⚠️ Mỗi lần chạy lại là một tin nhắn TÍNH PHÍ. Hàng đợi thử lại 3 lần —
+   * chấp nhận được vì lỗi thường xảy ra TRƯỚC khi tin được gửi. Nếu nhà cung
+   * cấp của bạn tính phí cả khi trả lỗi, hạ `attempts` xuống 1 cho loại này.
+   */
+  "sms:send": SmsMessage;
 
   /** Đẩy push notification tới thiết bị của một danh sách người dùng. */
   "push:send": {

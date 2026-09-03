@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@repo/db";
 import { UserService } from "./user.service";
 import {
+  AccountBannedError,
+  AccountInactiveError,
+  assertLoginAllowed,
   DuplicateFieldError,
   InsufficientRoleLevelError,
   SelfActionForbiddenError,
@@ -282,5 +285,16 @@ describe("UserService", () => {
         SelfActionForbiddenError,
       );
     });
+  });
+});
+
+describe("assertLoginAllowed", () => {
+  it("chặn cả BANNED lẫn INACTIVE, cho ACTIVE đi qua", () => {
+    // Gom vào một hàm dùng chung cho cả ba đường đăng nhập (mật khẩu, OAuth,
+    // passkey). Bốn chỗ kiểm tra riêng lẻ là bốn cơ hội để một đường mới quên
+    // mất luật.
+    expect(() => assertLoginAllowed("ACTIVE")).not.toThrow();
+    expect(() => assertLoginAllowed("BANNED")).toThrow(AccountBannedError);
+    expect(() => assertLoginAllowed("INACTIVE")).toThrow(AccountInactiveError);
   });
 });

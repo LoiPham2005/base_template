@@ -1,8 +1,12 @@
 import { prisma } from "@repo/db";
+import { env } from "../config/env";
 import { logger } from "../common/logger";
 import { getMailer } from "../infra/mailer";
+import { getSmser } from "../infra/smser";
 import { TokenService } from "../auth/token.service";
 import { VerificationService } from "../auth/verification.service";
+import { AuditService } from "../audit/audit.service";
+import { DeviceService } from "../device/device.service";
 import type { JobHandlers } from "./types";
 
 /**
@@ -24,6 +28,13 @@ export const jobHandlers: JobHandlers = {
   async "email:send"(payload) {
     await getMailer().send(payload);
     logger.info("Đã gửi email", { to: payload.to, subject: payload.subject });
+  },
+
+  async "sms:send"(payload) {
+    await getSmser().send(payload);
+    // KHÔNG ghi nội dung vào log: mã OTP nằm trong đó, và log thường được giữ
+    // nhiều tháng ở một dịch vụ bên thứ ba.
+    logger.info("Đã gửi SMS", { to: payload.to });
   },
 
   async "push:send"(payload) {
@@ -61,15 +72,28 @@ export const jobHandlers: JobHandlers = {
     });
   },
 
+  /**
+   * Dọn MỌI bảng chỉ-tăng, chạy hằng ngày (xem `PURGE_CRON`).
+   *
+   * Bốn bảng dưới đây không bao giờ tự nhỏ đi: mỗi lần đăng nhập, mỗi lần bấm
+   * "quên mật khẩu", mỗi hành động nhạy cảm, mỗi lần mở app đều thêm một dòng.
+   * Thiếu job này thì chúng lớn âm thầm cho tới ngày truy vấn bắt đầu chậm —
+   * và lúc đó không ai nghĩ tới đây.
+   *
+   * Chạy TUẦN TỰ chứ không `Promise.all`: đây là bốn lệnh `DELETE` trên bảng
+   * lớn, chạy song song là bốn lần khoá dòng cùng lúc vào 3 giờ sáng.
+   */
   async "maintenance:purge-expired"() {
-    const tokens = new TokenService(prisma);
-    const verification = new VerificationService(prisma);
+    const refreshTokens = await new TokenService(prisma).purgeExpired();
+    const verificationTokens = await new VerificationService(prisma).purgeExpired();
+    const auditLogs = await new AuditService(prisma).purgeOlderThan(env.AUDIT_RETENTION_DAYS);
+    const staleDevices = await new DeviceService(prisma).purgeStale(env.DEVICE_STALE_DAYS);
 
-    const [refreshTokens, verificationTokens] = await Promise.all([
-      tokens.purgeExpired(),
-      verification.purgeExpired(),
-    ]);
-
-    logger.info("Đã dọn token hết hạn", { refreshTokens, verificationTokens });
+    logger.info("Đã dọn dữ liệu hết hạn", {
+      refreshTokens,
+      verificationTokens,
+      auditLogs,
+      staleDevices,
+    });
   },
 };

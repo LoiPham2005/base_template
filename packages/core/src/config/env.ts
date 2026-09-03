@@ -171,6 +171,35 @@ const coreEnvSchema = z.object({
   /** Hạn mã OTP gửi qua SMS. Rất ngắn — OTP chỉ có 6 chữ số. */
   PHONE_OTP_TTL_MINUTES: z.coerce.number().int().positive().max(60).default(5),
 
+  // --- Xác thực số điện thoại (SMS) ---------------------------------------
+  //
+  // ⚠️ KHÁC EMAIL Ở MỘT ĐIỂM QUYẾT ĐỊNH: MỖI TIN NHẮN TỐN TIỀN THẬT.
+  //
+  // Vì vậy luồng này mặc định TẮT, và khi bật thì có ba lớp chặn lạm dụng —
+  // rate limit theo IP, giãn cách giữa hai lần gửi, và trần theo NGÀY trên
+  // từng số điện thoại. Thiếu lớp thứ ba là mở cửa cho "SMS bombing": kẻ tấn
+  // công xoay IP, nhắm vào một số, và bạn trả hoá đơn.
+
+  /**
+   * Bật luồng xác thực số điện thoại. `0` = endpoint trả lỗi "chưa bật".
+   *
+   * Mặc định TẮT vì nó là tính năng duy nhất trong bộ khung có chi phí trực
+   * tiếp trên mỗi lần dùng.
+   */
+  PHONE_VERIFICATION_ENABLED: featureFlag(false),
+
+  /**
+   * Số SMS tối đa gửi tới MỘT số điện thoại trong 24 giờ.
+   *
+   * Đây là lớp chặn quan trọng nhất về mặt chi phí: rate limit theo IP không
+   * cản được kẻ xoay vòng IP, mà thuê một dải IP dân cư rẻ hơn nhiều so với
+   * hoá đơn SMS họ tạo ra cho bạn.
+   */
+  PHONE_OTP_MAX_PER_DAY: z.coerce.number().int().positive().max(50).default(5),
+
+  /** Giãn cách tối thiểu giữa hai lần gửi tới cùng một số. */
+  PHONE_OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().positive().max(3600).default(60),
+
   /**
    * Số lần nhập SAI tối đa cho một mã dùng-một-lần (OTP, mã khôi phục 2FA),
    * tính trên chính mã đó.
@@ -180,6 +209,38 @@ const coreEnvSchema = z.object({
    * Chạm ngưỡng thì mã bị huỷ, buộc phải xin mã mới.
    */
   VERIFICATION_MAX_ATTEMPTS: z.coerce.number().int().positive().max(20).default(5),
+
+  // --- Chính sách lưu trữ (job dọn dẹp hằng ngày chạy theo) ---------------
+
+  /**
+   * Giữ nhật ký kiểm toán bao nhiêu ngày.
+   *
+   * Bảng này CHỈ TĂNG. Không dọn thì sau vài năm nó lớn tới mức không ai tra
+   * nổi — tức là mất luôn tác dụng. 365 ngày là mức thường gặp; hãy đối chiếu
+   * với quy định áp dụng cho ngành của bạn trước khi hạ xuống.
+   */
+  AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().max(3650).default(365),
+
+  /**
+   * Thu hồi TỨC THÌ mọi access token cũ khi mật khẩu đổi.
+   *
+   * JWT đã ký thì không thu hồi được — đó là lý do hạn của nó ngắn (15 phút).
+   * Nhưng 15 phút vẫn là 15 phút mà kẻ đã chiếm tài khoản còn thao tác được
+   * SAU KHI chủ thật đã đổi mật khẩu. Bật cờ này thì `JwtAuthGuard` đối chiếu
+   * `iat` của token với `passwordChangedAt`, và cửa sổ đó biến mất.
+   *
+   * Cái giá: một lần đọc CACHE ở mỗi request đã xác thực (RAM nếu chưa có
+   * Redis). Tắt đi nếu bạn đo được nó thành nút thắt — nhưng hãy đo trước.
+   */
+  SESSION_STRICT_REVOCATION: featureFlag(true),
+
+  /**
+   * Xoá thiết bị không hoạt động quá bao nhiêu ngày.
+   *
+   * FCM từ chối token quá cũ, và giữ chúng lại chỉ làm chậm MỌI lần gửi push —
+   * Firebase còn coi việc gửi tới token chết là tín hiệu xấu và hạ uy tín gửi.
+   */
+  DEVICE_STALE_DAYS: z.coerce.number().int().positive().max(3650).default(180),
 
   /**
    * Hạn của "vé" 2FA — token trung gian cấp sau khi mật khẩu đúng nhưng chưa

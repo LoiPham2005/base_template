@@ -32,6 +32,7 @@ export const AUDIT_ACTIONS = {
   SESSION_REVOKED: "auth.session_revoked",
   EMAIL_CHANGE_REQUESTED: "auth.email_change_requested",
   EMAIL_CHANGED: "auth.email_changed",
+  PHONE_VERIFIED: "auth.phone_verified",
   TWO_FACTOR_FAILED: "auth.two_factor_failed",
   PASSKEY_REGISTERED: "auth.passkey_registered",
   PASSKEY_REMOVED: "auth.passkey_removed",

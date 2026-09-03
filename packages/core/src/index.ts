@@ -17,6 +17,8 @@ export * from "./infra/cache";
 export * from "./infra/rate-limit";
 export * from "./infra/queue";
 export * from "./infra/mailer";
+export * from "./infra/smser";
+export * from "./infra/sms";
 export * from "./infra/emails";
 export * from "./infra/storage";
 
@@ -31,6 +33,7 @@ export * from "./rbac/role.service";
 export * from "./auth/token.service";
 export * from "./auth/verification.service";
 export * from "./auth/auth.service";
+export * from "./auth/security-stamp.service";
 export * from "./auth/two-factor.service";
 export * from "./auth/webauthn.service";
 export * from "./auth/oauth.service";

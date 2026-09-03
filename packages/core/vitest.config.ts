@@ -29,6 +29,9 @@ export default defineConfig({
       // Khoá GIẢ, chỉ để các test mã hoá/2FA chạy được. Không bao giờ được
       // dùng lại ở bất kỳ môi trường thật nào.
       ENCRYPTION_KEY: "khoa-gia-chi-dung-trong-test-khong-dung-that",
+      // BẬT trong test để kiểm được phần chống lạm dụng SMS. Mặc định thật của
+      // hệ thống là TẮT — xem `PHONE_VERIFICATION_ENABLED` trong `config/env.ts`.
+      PHONE_VERIFICATION_ENABLED: "1",
       // Bỏ trống REDIS_URL có chủ đích: cache và rate limit dùng bản RAM, nên
       // test chạy được mà không cần dựng Redis.
     },

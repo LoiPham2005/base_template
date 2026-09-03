@@ -31,11 +31,11 @@ import type { PublicUser } from "@repo/contracts";
 import { webAuthnConfig } from "../config/env";
 import { logger } from "../common/logger";
 import {
-  AccountBannedError,
   ForbiddenError,
   InvalidCredentialsError,
   UserNotFoundError,
   WebAuthnVerificationError,
+  assertLoginAllowed,
 } from "../common/errors";
 import { UserService } from "../user/user.service";
 
@@ -297,7 +297,7 @@ export class WebAuthnService {
     // BANNED chặn mọi đường đăng nhập. `lockedUntil` thì KHÔNG áp dụng: đó là
     // khoá do dò MẬT KHẨU, mà passkey không dùng mật khẩu — khoá nó ở đây là
     // phạt người dùng vì hành vi của kẻ tấn công.
-    if (user.status === "BANNED") throw new AccountBannedError();
+    assertLoginAllowed(user.status);
 
     return user;
   }

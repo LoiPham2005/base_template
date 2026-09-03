@@ -84,6 +84,7 @@ CREATE TABLE "users" (
     "emailVerifiedAt" TIMESTAMPTZ(3),
     "phoneVerifiedAt" TIMESTAMPTZ(3),
     "pendingEmail" TEXT,
+    "passwordChangedAt" TIMESTAMPTZ(3),
     "failedLoginAttempts" INTEGER NOT NULL DEFAULT 0,
     "lockedUntil" TIMESTAMPTZ(3),
     "deletedAt" TIMESTAMPTZ(3),
@@ -286,10 +287,7 @@ CREATE INDEX "users_username_idx" ON "users"("username");
 CREATE INDEX "users_status_idx" ON "users"("status");
 
 -- CreateIndex
-CREATE INDEX "users_createdAt_idx" ON "users"("createdAt");
-
--- CreateIndex
-CREATE INDEX "users_deletedAt_idx" ON "users"("deletedAt");
+CREATE INDEX "users_deletedAt_createdAt_idx" ON "users"("deletedAt", "createdAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "user_profiles_userId_key" ON "user_profiles"("userId");
@@ -416,20 +414,13 @@ ALTER TABLE "notification_recipients" ADD CONSTRAINT "notification_recipients_us
 -- PARTIAL UNIQUE INDEX — phần Prisma không diễn đạt được
 -- ============================================================
 --
--- `email`, `phone`, `username` phải là DUY NHẤT, nhưng CHỈ trong số các tài
--- khoản còn sống.
---
--- Dùng `@unique` của Prisma thì ràng buộc áp cho cả dòng đã xoá mềm: xoá một
--- tài khoản là địa chỉ email đó vĩnh viễn không ai đăng ký lại được, kể cả
--- chính chủ. Cách chữa phổ biến là bóp méo email lúc xoá
--- (`a@b.com:deleted:1699…`) — làm hỏng dữ liệu thật chỉ để lách một ràng buộc,
--- và làm nhật ký kiểm toán khó đọc.
---
--- Postgres hỗ trợ index có điều kiện, Prisma thì chưa sinh ra được, nên ba câu
--- này viết tay. Database vẫn từ chối trùng và vẫn ném P2002 như thường.
+-- `email`, `phone`, `username` phải DUY NHẤT, nhưng CHỈ trong số tài khoản còn
+-- sống. `@unique` của Prisma áp cho cả dòng đã xoá mềm — nghĩa là xoá một tài
+-- khoản là địa chỉ đó vĩnh viễn không ai đăng ký lại được, kể cả chính chủ.
 --
 -- ⚠️ HỆ QUẢ: Prisma không biết về chúng, nên `findUnique({ where: { email } })`
 -- KHÔNG biên dịch được. Dùng `findFirst({ where: { email, deletedAt: null } })`.
+-- Database vẫn từ chối trùng và vẫn ném P2002 như thường.
 
 CREATE UNIQUE INDEX "users_email_active_key"
   ON "users" ("email") WHERE "deletedAt" IS NULL;

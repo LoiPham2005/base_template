@@ -5,6 +5,7 @@ import { RoleService } from "./rbac/role.service";
 import { TokenService } from "./auth/token.service";
 import { VerificationService } from "./auth/verification.service";
 import { AuthService } from "./auth/auth.service";
+import { SecurityStampService } from "./auth/security-stamp.service";
 import { TwoFactorService } from "./auth/two-factor.service";
 import { OAuthService } from "./auth/oauth.service";
 import { WebAuthnService } from "./auth/webauthn.service";
@@ -42,6 +43,7 @@ const permissions = new PermissionService(prisma);
 const users = new UserService(prisma);
 const tokens = new TokenService(prisma);
 const verification = new VerificationService(prisma);
+const securityStamp = new SecurityStampService(prisma);
 
 export const core = {
   user: users,
@@ -49,7 +51,8 @@ export const core = {
   role: new RoleService(prisma, permissions),
   token: tokens,
   verification,
-  auth: new AuthService(prisma, users, verification, tokens),
+  auth: new AuthService(prisma, users, verification, tokens, securityStamp),
+  securityStamp,
   twoFactor: new TwoFactorService(prisma),
   oauth: new OAuthService(prisma, users),
   webauthn: new WebAuthnService(prisma, users),

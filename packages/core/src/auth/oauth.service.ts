@@ -1,6 +1,11 @@
 import type { PrismaClient } from "@repo/db";
 import { SYSTEM_ROLES, type PublicUser } from "@repo/contracts";
-import { AccountBannedError, ForbiddenError, OAuthEmailRequiredError } from "../common/errors";
+import {
+  AccountBannedError,
+  ForbiddenError,
+  OAuthEmailRequiredError,
+  assertLoginAllowed,
+} from "../common/errors";
 import { UserService, toPublicUser } from "../user/user.service";
 import type { OAuthProfile } from "./oauth/client";
 
@@ -24,13 +29,30 @@ export class OAuthService {
     private readonly users: UserService,
   ) {}
 
-  async loginWithProfile(profile: OAuthProfile): Promise<PublicUser> {
+  async loginWithProfile(rawProfile: OAuthProfile): Promise<PublicUser> {
+    /*
+     * Chuẩn hoá email NGAY Ở CỬA.
+     *
+     * Google/Apple trả về đúng thứ người dùng đã gõ khi đăng ký — kể cả
+     * `Loi@Gmail.com`. Còn `email` trong database luôn ở dạng chữ thường (do
+     * `emailSchema` của Zod ép), và mọi truy vấn tra cứu cũng lowercase.
+     *
+     * Không chuẩn hoá ở đây thì: người dùng đã có tài khoản `loi@gmail.com`,
+     * bấm "Đăng nhập bằng Google", provider trả `Loi@Gmail.com` → tra không ra
+     * → hệ thống TẠO TÀI KHOẢN MỚI thay vì liên kết. Họ mất sạch dữ liệu cũ mà
+     * không hiểu vì sao.
+     */
+    const profile: OAuthProfile = {
+      ...rawProfile,
+      email: rawProfile.email?.trim().toLowerCase() ?? null,
+    };
+
     const user = await this.resolveUser(profile);
 
     // BANNED chặn mọi cách đăng nhập, kể cả OAuth. `lockedUntil` thì KHÔNG áp
     // dụng ở đây — đó là khoá do brute-force MẬT KHẨU, không liên quan gì tới
     // việc đăng nhập bằng Google/GitHub.
-    if (user.status === "BANNED") throw new AccountBannedError();
+    assertLoginAllowed(user.status);
 
     return user;
   }

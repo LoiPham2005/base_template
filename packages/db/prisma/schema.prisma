@@ -1,71 +1,41 @@
 // Schema dùng chung cho toàn bộ monorepo.
+// CHỈ packages/core được import Prisma Client (@repo/eslint-config enforce).
 //
-// CHỈ packages/core được import Prisma Client (ràng buộc này do
-// @repo/eslint-config enforce trên apps/api và apps/web).
-//
-// Bố cục:
-//   1. RBAC        — Role / Permission / gán theo vai trò & theo từng người
-//   2. Người dùng  — User (chỉ phục vụ xác thực) + UserProfile + 2FA
-//   3. Phiên & token — OAuthAccount / RefreshToken / VerificationToken
-//   4. Thiết bị & thông báo
-//   5. Nhật ký kiểm toán
-//
-// ---
-// QUY ƯỚC: MỌI CỘT THỜI GIAN LÀ `Timestamptz`
-//
-// Mặc định của Prisma là `timestamp(3)` KHÔNG có múi giờ. Đi qua Prisma thì
-// vẫn đúng (nó quy về UTC), nhưng khoảnh khắc có một câu SQL viết tay, một
-// công cụ như DBeaver, hay một `DEFAULT now()` phía database chen vào là giá
-// trị lệch đi vài tiếng mà không có gì báo. Với hệ thống xác thực — nơi
-// `expiresAt` và `lockedUntil` quyết định ai vào được — đó là loại lỗi tệ nhất.
+// QUY ƯỚC: mọi cột thời gian là `Timestamptz`. Mặc định của Prisma là
+// `timestamp(3)` không có múi giờ — một câu SQL viết tay hay `DEFAULT now()`
+// phía database sẽ lệch vài tiếng mà không có gì báo.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  // Đổi sang "mysql" / "sqlite" ở đây nếu dự án cần — không file nào ngoài
-  // file này phụ thuộc vào provider.
-  //
-  // ⚠️ Ngoại lệ: các partial unique index trong migration init là cú pháp
-  // PostgreSQL. Đổi provider thì phải viết lại chúng.
+  // Đổi provider ở đây — không file nào khác phụ thuộc vào nó.
+  // ⚠️ Trừ các partial unique index trong migration init: đó là cú pháp Postgres.
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 // ============================================================
-// 1. PHÂN QUYỀN (RBAC): NHIỀU VAI TRÒ + QUYỀN CHI TIẾT
+// 1. PHÂN QUYỀN (RBAC)
 // ============================================================
 
-/// Vai trò. DANH SÁCH vai trò nằm trong database (quản trị viên tạo thêm được
-/// lúc chạy); DANH MỤC quyền thì nằm trong code (@repo/contracts) — xem ghi chú
-/// đầu file packages/contracts/src/permissions.ts để hiểu vì sao chia như vậy.
+/// DANH SÁCH vai trò nằm trong database (admin tạo thêm lúc chạy).
+/// DANH MỤC quyền nằm trong code — xem `@repo/contracts/permissions.ts`.
 model Role {
   id          String  @id @default(cuid())
-  /// Mã cố định, viết HOA: SUPER_ADMIN, ADMIN, USER… Đây là thứ code so sánh,
-  /// còn `name` chỉ để hiển thị.
+  /// Mã cố định, viết HOA. Đây là thứ code so sánh; `name` chỉ để hiển thị.
   key         String  @unique
   name        String
   description String?
 
-  /// BẬC QUYỀN LỰC. Cao hơn = mạnh hơn.
-  ///
-  /// Đây là thứ ngăn leo thang đặc quyền. Không có nó, bất kỳ ai có quyền
-  /// `user:create` đều tạo được một tài khoản mang vai trò SUPER_ADMIN rồi
-  /// đăng nhập vào đó — chốt "không tự đổi vai trò của chính mình" không cứu
-  /// được, vì họ tạo tài khoản KHÁC.
-  ///
-  /// Luật (áp trong UserService): chỉ gán/gỡ được vai trò có `level` THẤP HƠN
-  /// HẲN bậc cao nhất của chính mình, và không đụng được vào người có bậc
-  /// bằng hoặc cao hơn mình.
-  ///
-  /// Thang mặc định của seed: USER 0 · STAFF 10 · MANAGER 20 · ADMIN 50 ·
-  /// SUPER_ADMIN 100. Chừa khoảng trống để chèn vai trò mới vào giữa.
+  /// Bậc quyền lực, cao hơn = mạnh hơn. Chặn leo thang đặc quyền: chỉ gán được
+  /// vai trò có `level` THẤP HƠN HẲN bậc của mình, và không đụng được vào người
+  /// có bậc bằng hoặc cao hơn. Luật áp trong `UserService`.
+  /// Seed: USER 0 · STAFF 10 · MANAGER 20 · ADMIN 50 · SUPER_ADMIN 100.
   level       Int     @default(0)
 
-  /// Vai trò cốt lõi — không cho xoá, không cho đổi key. Xoá vai trò đang được
-  /// gán cho người dùng là cách nhanh nhất để khoá toàn bộ hệ thống khỏi
-  /// chính người quản trị.
+  /// Vai trò cốt lõi — không cho xoá, không đổi key.
   isSystem    Boolean @default(false)
 
   permissions RolePermission[]
@@ -78,16 +48,15 @@ model Role {
   @@map("roles")
 }
 
-/// Quyền hạn. Bảng này được ĐỒNG BỘ TỪ CODE bằng `pnpm db:seed` — đừng thêm
-/// dòng bằng tay, vì một quyền không có dòng mã nào kiểm tra thì tick vào cũng
-/// không thay đổi điều gì.
+/// Đồng bộ TỪ CODE bằng `pnpm db:seed` — đừng thêm dòng bằng tay. Một quyền
+/// không có dòng mã nào kiểm tra thì tick vào cũng không đổi gì.
 model Permission {
   id          String  @id @default(cuid())
-  /// Quy ước: `<tài-nguyên>:<hành-động>`, thêm `:own` khi chỉ áp dụng cho dữ
-  /// liệu của chính người đó. Ví dụ: `user:read`, `profile:update:own`.
+  /// `<tài-nguyên>:<hành-động>`, thêm `:own` khi chỉ áp cho dữ liệu của chính
+  /// người đó. Ví dụ: `user:read`, `profile:update:own`.
   key         String  @unique
   name        String
-  /// Nhóm hiển thị trên màn phân quyền: "Quản lý Người dùng", "Đơn hàng"…
+  /// Nhóm hiển thị trên màn phân quyền.
   category    String
   description String?
 
@@ -114,13 +83,12 @@ model RolePermission {
   @@map("role_permissions")
 }
 
-/// Một người có thể mang NHIỀU vai trò. Quyền cuối cùng là HỢP của mọi vai trò
-/// (rồi mới áp các dòng UserPermission bên dưới) — xem PermissionService.
+/// Một người mang NHIỀU vai trò. Quyền cuối cùng là HỢP của mọi vai trò, rồi
+/// mới áp `UserPermission` — xem `PermissionService`.
 model UserRole {
   userId String
   roleId String
-  /// Ai đã gán vai trò này. Chuỗi trần, KHÔNG có khoá ngoại — cùng lý do với
-  /// `AuditLog.actorId`: dấu vết phải sống lâu hơn người để lại nó.
+  /// Chuỗi trần, không khoá ngoại — dấu vết phải sống lâu hơn người để lại nó.
   assignedBy String?
   createdAt  DateTime @default(now()) @db.Timestamptz(3)
 
@@ -133,23 +101,14 @@ model UserRole {
 }
 
 /// Ngoại lệ cho từng cá nhân, đè lên quyền đến từ vai trò.
-///
-/// `isGranted = false` (TƯỚC quyền) luôn THẮNG mọi vai trò. Đây là lựa chọn có
-/// chủ đích: cần chặn gấp một người khỏi một hành động thì phải chặn được ngay,
-/// không phải đi gỡ họ khỏi vai trò rồi dựng lại một vai trò gần giống.
+/// `isGranted = false` (TƯỚC quyền) luôn THẮNG mọi vai trò.
 model UserPermission {
   userId       String
   permissionId String
-  isGranted    Boolean  @default(true)
+  isGranted    Boolean   @default(true)
   grantedBy    String?
-
-  /// Hạn của ngoại lệ này. `null` = vĩnh viễn.
-  ///
-  /// "Cấp quyền này trong 24 giờ để xử lý sự cố" là nhu cầu rất thường gặp, và
-  /// không có cột này thì nó âm thầm thành vĩnh viễn — không ai nhớ quay lại
-  /// gỡ, và cũng không có gì nhắc.
+  /// `null` = vĩnh viễn. Có hạn thì quyền tự mất, không ai phải nhớ gỡ.
   expiresAt    DateTime? @db.Timestamptz(3)
-
   createdAt    DateTime  @default(now()) @db.Timestamptz(3)
 
   user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -166,82 +125,65 @@ model UserPermission {
 // ============================================================
 
 enum UserStatus {
-  /// Đang hoạt động.
   ACTIVE
-  /// Chưa kích hoạt hoặc tạm ngưng — đăng nhập được nhưng nên bị chặn ở tầng
-  /// nghiệp vụ nếu dự án yêu cầu xác thực email trước.
+  /// Tạm ngưng. CHẶN đăng nhập, nhưng thông điệp khác BANNED (không phải hình phạt).
+  /// Cần "chưa xác thực email thì chưa cho vào"? Dùng `emailVerifiedAt`, đừng
+  /// dùng trạng thái này — một cột một ý nghĩa.
   INACTIVE
-  /// Bị khoá do vi phạm. Chặn MỌI đường đăng nhập, kể cả OAuth.
+  /// Khoá do vi phạm. Chặn MỌI đường đăng nhập: mật khẩu, OAuth, passkey.
   BANNED
 }
 
-/// Bảng User cố tình giữ mỏng: CHỈ phục vụ xác thực và bảo mật.
+/// Bảng User cố tình giữ mỏng: CHỈ phục vụ xác thực. Thông tin cá nhân nằm ở
+/// `UserProfile` — bảng này bị đọc ở gần như mọi request xác thực.
 ///
-/// Mọi thông tin cá nhân (tên, ảnh, địa chỉ…) nằm ở `UserProfile`. Tách ra vì
-/// bảng này bị đọc ở gần như mọi request xác thực, còn hồ sơ thì hiếm khi cần
-/// — và vì thông tin cá nhân là thứ chịu ràng buộc pháp lý (xoá theo yêu cầu,
-/// xuất dữ liệu), dễ xử lý hơn nhiều khi nó nằm gọn một chỗ.
+/// ⚠️ `email` / `phone` / `username` KHÔNG dùng `@unique` của Prisma. Chúng được
+/// ràng buộc bằng **partial unique index** viết tay trong migration:
 ///
-/// ---
-/// ⚠️ `email` / `phone` / `username` KHÔNG dùng `@unique` CỦA PRISMA
+///     CREATE UNIQUE INDEX users_email_active_key ON users (email)
+///       WHERE deleted_at IS NULL;
 ///
-/// Chúng được ràng buộc bằng **partial unique index** viết tay trong migration:
+/// Vì `@unique` thường áp cho cả dòng đã xoá mềm — xoá một tài khoản là email
+/// đó vĩnh viễn không ai đăng ký lại được.
 ///
-///     CREATE UNIQUE INDEX users_email_active_key
-///       ON users (email) WHERE deleted_at IS NULL;
-///
-/// Vì sao: `@unique` thường áp cho CẢ dòng đã xoá mềm. Nghĩa là xoá một tài
-/// khoản xong thì địa chỉ email đó vĩnh viễn không ai đăng ký lại được — kể cả
-/// chính chủ. Cách chữa phổ biến là bóp méo email lúc xoá
-/// (`a@b.com:deleted:1699…`), nhưng như vậy là làm hỏng dữ liệu thật chỉ để
-/// lách một ràng buộc.
-///
-/// HỆ QUẢ PHẢI NHỚ: Prisma không biết về index đó, nên
-/// `prisma.user.findUnique({ where: { email } })` KHÔNG biên dịch được. Dùng
-/// `findFirst` kèm `deletedAt: null`. Database vẫn từ chối trùng và vẫn ném
-/// P2002 như thường.
+/// HỆ QUẢ: `findUnique({ where: { email } })` KHÔNG biên dịch được. Dùng
+/// `findFirst` kèm `deletedAt: null`. Database vẫn ném P2002 như thường.
 model User {
   id       String  @id @default(cuid())
   email    String?
   phone    String?
   username String?
-  /// Hash Argon2id. Bộ khung KHÔNG hỗ trợ thuật toán nào khác — một hash lạ
-  /// lọt vào đây chỉ dẫn tới "sai mật khẩu", không làm hỏng gì.
-  /// `null` = tài khoản chưa đặt mật khẩu: admin tạo hộ, hoặc chỉ đăng nhập
-  /// qua OAuth. Khác hẳn chuỗi rỗng — vốn là một mật khẩu "hợp lệ" nhìn từ
-  /// tầng dữ liệu.
+  /// Hash Argon2id. `null` = chưa đặt mật khẩu (admin tạo hộ, hoặc chỉ OAuth) —
+  /// khác hẳn chuỗi rỗng, vốn là một mật khẩu "hợp lệ" nhìn từ tầng dữ liệu.
   password String?
 
   status          UserStatus @default(ACTIVE)
   emailVerifiedAt DateTime?  @db.Timestamptz(3)
   phoneVerifiedAt DateTime?  @db.Timestamptz(3)
 
-  /// Địa chỉ email MỚI đang chờ xác thực.
-  ///
-  /// Đổi email là đường chiếm tài khoản kinh điển, nên nó không bao giờ được
-  /// ghi thẳng vào `email`: địa chỉ mới phải tự chứng minh quyền sở hữu trước
-  /// (VerificationToken loại EMAIL_CHANGE), và địa chỉ CŨ được gửi thư báo để
-  /// chủ thật còn kịp phản ứng.
+  /// Email MỚI đang chờ xác thực. Không bao giờ ghi thẳng vào `email`: địa chỉ
+  /// mới phải tự chứng minh quyền sở hữu trước, và địa chỉ cũ được báo.
   pendingEmail String?
 
-  /// Số lần sai mật khẩu LIÊN TIẾP. Reset về 0 khi đăng nhập thành công.
+  /// Mốc đổi mật khẩu gần nhất.
+  ///
+  /// Cho phép thu hồi TỨC THÌ mọi access token cấp trước mốc này: `JwtAuthGuard`
+  /// đối chiếu `iat` của token với giá trị ở đây. Không có nó thì kẻ đã chiếm
+  /// tài khoản còn thao tác được 15 phút SAU KHI chủ thật đổi mật khẩu — vì JWT
+  /// đã ký thì không thu hồi được.
+  passwordChangedAt   DateTime? @db.Timestamptz(3)
+
+  /// Sai mật khẩu LIÊN TIẾP; reset về 0 khi đăng nhập thành công.
   failedLoginAttempts Int       @default(0)
   /// Khoá tạm do brute-force, tự hết hạn. Khác `status = BANNED` (khoá tay).
   lockedUntil         DateTime? @db.Timestamptz(3)
   /// Xoá mềm. Mọi truy vấn xác thực phải lọc `deletedAt: null`.
   deletedAt           DateTime? @db.Timestamptz(3)
 
-  // --- Xác thực hai lớp (TOTP) ---------------------------------------------
-
-  /// Khoá bí mật TOTP, **đã mã hoá AES-256-GCM** trước khi ghi.
-  ///
-  /// Không lưu dạng thô có chủ đích: khoá này sinh ra được mã hợp lệ, nên nếu
-  /// database bị rò thì 2FA mất tác dụng hoàn toàn. Khoá giải mã nằm ở biến
-  /// môi trường `ENCRYPTION_KEY` — tức là ngoài database.
-  twoFactorSecret String?
-
-  /// `null` = chưa bật 2FA. Có `twoFactorSecret` mà cột này null nghĩa là
-  /// người dùng đang ở giữa luồng cài đặt (đã quét QR, chưa nhập mã xác nhận).
+  /// Khoá TOTP, **đã mã hoá AES-256-GCM** (khoá giải mã ở `ENCRYPTION_KEY`,
+  /// tức là ngoài database). Lưu thô thì rò database là mất luôn 2FA.
+  twoFactorSecret    String?
+  /// `null` = chưa bật. Có secret mà cột này null = đang cài dở.
   twoFactorEnabledAt DateTime? @db.Timestamptz(3)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -261,14 +203,15 @@ model User {
   devices       UserDevice[]
   notifications NotificationRecipient[]
 
-  // Index thường (không unique) cho việc TRA CỨU. Ràng buộc duy nhất do
-  // partial unique index trong migration đảm nhiệm — xem ghi chú đầu model.
+  // Index thường cho TRA CỨU; ràng buộc duy nhất do partial unique index lo.
   @@index([email])
   @@index([phone])
   @@index([username])
   @@index([status])
-  @@index([createdAt])
-  @@index([deletedAt])
+  /// Phục vụ truy vấn danh sách: lọc `deletedAt: null` rồi sắp theo `createdAt`
+  /// giảm dần. Hai index rời bắt Postgres chọn một cái rồi lọc phần còn lại;
+  /// index ghép này đọc thẳng đúng thứ tự cần.
+  @@index([deletedAt, createdAt])
   @@map("users")
 }
 
@@ -292,8 +235,7 @@ model UserProfile {
   city      String?
   district  String?
   country   String?   @default("VN")
-  /// Chỗ nhét thêm field riêng của từng dự án mà không phải viết migration.
-  /// Đừng lạm dụng: thứ gì cần lọc hoặc sắp xếp thì phải là cột thật.
+  /// Field riêng của từng dự án. Thứ gì cần lọc/sắp xếp thì phải là cột thật.
   metadata  Json?
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -302,18 +244,12 @@ model UserProfile {
   @@map("user_profiles")
 }
 
-/// Mã khôi phục 2FA — dùng khi mất điện thoại.
-///
-/// Không có nó thì bật 2FA đồng nghĩa với "mất máy là mất tài khoản", và người
-/// dùng sẽ không bật. Mỗi mã dùng ĐÚNG MỘT LẦN.
-///
-/// `codeHash` băm kèm `userId` (xem `hashScopedToken`), nên hai người có thể
-/// bốc trúng cùng một mã mà không đụng nhau — mã khôi phục ngắn hơn token
-/// trong email nên khả năng trùng là có thật.
+/// Mã khôi phục 2FA, dùng khi mất điện thoại. Mỗi mã dùng ĐÚNG MỘT LẦN.
+/// `codeHash` băm kèm `userId` (`hashScopedToken`) vì mã ngắn, có khả năng trùng.
 model RecoveryCode {
-  id       String @id @default(cuid())
-  userId   String
-  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   codeHash String
   usedAt   DateTime? @db.Timestamptz(3)
@@ -325,64 +261,34 @@ model RecoveryCode {
   @@map("recovery_codes")
 }
 
-/// Passkey (WebAuthn) — vân tay / Face ID / Windows Hello / khoá cứng.
+/// Passkey (WebAuthn). Khoá riêng không rời khỏi thiết bị và trình duyệt chỉ ký
+/// cho đúng tên miền đã đăng ký → chống phishing tuyệt đối.
 ///
-/// ---
-/// VÌ SAO MẠNH HƠN CẢ MẬT KHẨU LẪN TOTP
-///
-/// Khoá riêng KHÔNG BAO GIỜ rời khỏi thiết bị, và trình duyệt chỉ ký cho ĐÚNG
-/// tên miền đã đăng ký. Nghĩa là **chống phishing tuyệt đối**: một trang giả
-/// `dat-san-247.com.vn-login.xyz` không thể xin được chữ ký hợp lệ, kể cả khi
-/// người dùng bị lừa hoàn toàn và bấm mọi thứ được yêu cầu.
-///
-/// Mật khẩu và TOTP đều không có tính chất đó — người dùng gõ được vào trang
-/// thật thì cũng gõ được vào trang giả, và kẻ tấn công chuyển tiếp ngay sang
-/// trang thật trong vài giây.
-///
-/// ---
-/// MỘT PASSKEY ĐÃ LÀ HAI YẾU TỐ
-///
-/// Đăng nhập bằng passkey với `userVerification: "required"` gồm: THIẾT BỊ
-/// (khoá riêng nằm trong secure enclave) + SINH TRẮC/PIN (mở khoá secure
-/// enclave). Vì vậy hệ thống KHÔNG hỏi thêm mã TOTP sau khi passkey hợp lệ —
-/// xem `WebAuthnService.verifyAuthentication`.
+/// Đăng nhập bằng passkey với `userVerification: required` ĐÃ là hai yếu tố
+/// (thiết bị + sinh trắc), nên hệ thống không hỏi thêm TOTP.
 model WebAuthnCredential {
   id     String @id @default(cuid())
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  /// `credentialID` do authenticator sinh, base64url. Ngẫu nhiên và duy nhất
-  /// toàn cầu, nên unique toàn cục là đúng — không cần ràng buộc theo userId.
+  /// base64url, ngẫu nhiên và duy nhất toàn cầu.
   credentialId String @unique
-  /// Khoá CÔNG KHAI (định dạng COSE), base64url.
-  ///
-  /// Không cần mã hoá như `twoFactorSecret`: đây là khoá công khai, biết nó
-  /// không ký được gì. Khoá riêng nằm trong thiết bị người dùng và không có
-  /// đường nào tới máy chủ.
+  /// Khoá CÔNG KHAI (COSE), base64url. Không cần mã hoá — biết nó không ký được gì.
   publicKey    String
 
-  /// Bộ đếm chống phát lại. Authenticator tăng nó sau mỗi lần ký; mã nhận về
-  /// có counter thấp hơn giá trị đã lưu nghĩa là authenticator đã bị nhân bản.
-  ///
-  /// `BigInt` vì đặc tả WebAuthn định nghĩa nó là số nguyên KHÔNG DẤU 32 bit
-  /// (tối đa 4.294.967.295), vượt trần của `Int` (2.147.483.647). Passkey hiện
-  /// đại thường báo 0 và không dùng counter, nhưng khoá cứng thì có.
+  /// Chống phát lại: counter nhận về thấp hơn giá trị đã lưu = authenticator bị
+  /// nhân bản. `BigInt` vì đặc tả định nghĩa uint32, vượt trần của `Int`.
   counter BigInt @default(0)
 
-  /// `singleDevice` = khoá cứng USB · `multiDevice` = passkey đồng bộ được.
+  /// `singleDevice` = khoá cứng · `multiDevice` = passkey đồng bộ được.
   deviceType String
-  /// Đã đồng bộ lên iCloud Keychain / Google Password Manager chưa. Quan
-  /// trọng khi tư vấn người dùng: khoá `singleDevice` chưa sao lưu mà mất là
-  /// mất hẳn.
+  /// Đã đồng bộ lên iCloud/Google chưa. `singleDevice` chưa sao lưu mà mất là mất hẳn.
   backedUp   Boolean @default(false)
-  /// usb · nfc · ble · internal · hybrid — trình duyệt dùng để gợi ý đúng cách
-  /// kết nối ở lần đăng nhập sau.
+  /// usb · nfc · ble · internal · hybrid
   transports String[]
-  /// Định danh MODEL của authenticator (YubiKey 5, iCloud Keychain…). Dùng để
-  /// hiện đúng tên/biểu tượng trong danh sách.
+  /// Định danh model authenticator, dùng hiện tên/biểu tượng.
   aaguid     String?
 
-  /// Tên do người dùng đặt: "iPhone của Loi", "YubiKey ở nhà".
   name       String?
   lastUsedAt DateTime? @db.Timestamptz(3)
 
@@ -397,12 +303,8 @@ model WebAuthnCredential {
 // 3. OAUTH, TOKEN & PHIÊN ĐĂNG NHẬP
 // ============================================================
 
-/// ⚠️ Cố ý KHÔNG lưu access/refresh token của nhà cung cấp.
-///
-/// Chúng chỉ cần khi bạn gọi API của Google/Facebook THAY MẶT người dùng (đọc
-/// lịch, đăng bài). Dùng OAuth thuần để đăng nhập thì lưu chúng là ôm thêm một
-/// kho bí mật giá trị cao mà không đổi lại được gì. Cần thì thêm sau, và nhớ
-/// mã hoá như `User.twoFactorSecret`.
+/// ⚠️ Cố ý KHÔNG lưu access/refresh token của nhà cung cấp — chúng chỉ cần khi
+/// gọi API của họ thay mặt người dùng. Cần thì thêm sau, nhớ mã hoá.
 model OAuthAccount {
   id                String   @id @default(cuid())
   userId            String
@@ -417,32 +319,23 @@ model OAuthAccount {
   @@map("oauth_accounts")
 }
 
-/// Refresh token cho client mobile/SPA. Chỉ lưu SHA-256 — rò database không
-/// đồng nghĩa với rò phiên đăng nhập.
+/// Chỉ lưu SHA-256 — rò database không đồng nghĩa với rò phiên đăng nhập.
 model RefreshToken {
-  id        String @id @default(cuid())
+  id String @id @default(cuid())
 
-  /// ĐỊNH DANH PHIÊN, ổn định xuyên suốt mọi lần xoay vòng.
-  ///
-  /// Giải hai bài toán cùng lúc:
-  ///
-  /// 1. Client có một id KHÔNG đổi để nhận ra "thiết bị này" trong màn quản lý
-  ///    phiên. Nếu dùng `id` của từng token thì giá trị đó đổi sau mỗi lần
-  ///    refresh, và client phải cập nhật liên tục — một wart mà mọi hệ thống
-  ///    rotation đều gặp nếu thiếu cột này.
-  /// 2. Khi phát hiện token bị dùng lại, thu hồi đúng MỘT họ (một thiết bị bị
-  ///    đánh cắp) thay vì đá người dùng ra khỏi mọi thiết bị họ đang có.
-  familyId  String
+  /// ĐỊNH DANH PHIÊN, không đổi qua các lần xoay vòng. Client dùng nó để nhận
+  /// ra "thiết bị này"; khi phát hiện token bị dùng lại thì thu hồi đúng MỘT họ
+  /// thay vì đá người dùng khỏi mọi thiết bị.
+  familyId String
 
-  tokenHash String @unique
+  tokenHash String  @unique
   userId    String
-  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   deviceId  String?
   userAgent String?
   ip        String?
 
-  /// Người dùng đã vượt qua 2FA cho phiên này chưa. Phiên cấp từ luồng có 2FA
-  /// mang `true`; phiên cấp trước khi bật 2FA thì không.
+  /// Phiên này đã vượt qua 2FA chưa.
   twoFactorAt DateTime? @db.Timestamptz(3)
 
   expiresAt DateTime  @db.Timestamptz(3)
@@ -466,19 +359,10 @@ enum VerificationTokenType {
   PASSWORD_RESET
 }
 
-/// Token dùng MỘT LẦN gửi qua email/SMS. Chỉ lưu bản băm.
-///
-/// ---
-/// HAI KIỂU BĂM, KHÔNG PHẢI MỘT
-///
-///   • Token trong LINK (email) là 256 bit ngẫu nhiên → băm trần. Người dùng
-///     chỉ gửi lại mỗi token, nên phải tra cứu được bằng chính nó.
-///   • OTP qua SMS chỉ có 6 chữ số → băm KÈM `userId`. Băm trần thì
-///     `SHA-256("123456")` là một hằng số: hai người cùng bốc trúng dãy đó sẽ
-///     đụng nhau, và tệ hơn — tra cứu bằng hash trần sẽ trả về bản ghi của
-///     NGƯỜI KHÁC, tức là đăng nhập nhầm tài khoản.
-///
-/// Xem `hashOpaqueToken` và `hashScopedToken`.
+/// Token dùng MỘT LẦN. Chỉ lưu bản băm, và có HAI kiểu băm:
+///   • Token trong link (256 bit) → băm trần, tra cứu được bằng chính nó.
+///   • OTP 6 số → băm KÈM `userId`. Băm trần thì `SHA-256("123456")` là hằng số,
+///     và tra cứu sẽ ra bản ghi của NGƯỜI KHÁC — đăng nhập nhầm tài khoản.
 model VerificationToken {
   id        String                @id @default(cuid())
   tokenHash String                @unique
@@ -486,16 +370,12 @@ model VerificationToken {
   userId    String
   user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  /// Nơi mã được gửi tới. Với `EMAIL_CHANGE` đây là địa chỉ MỚI — đó cũng là
-  /// nơi duy nhất lưu nó cho tới khi người dùng bấm xác nhận.
+  /// Nơi mã được gửi tới. Với `EMAIL_CHANGE` là địa chỉ MỚI.
   destination String?
 
-  /// Số lần nhập SAI.
-  ///
-  /// Bắt buộc với OTP: 6 chữ số chỉ có 10^6 khả năng, và rate limit theo IP
-  /// không cản được kẻ xoay vòng IP. Chạm ngưỡng thì token bị huỷ, buộc phải
-  /// xin mã mới.
-  attempts  Int @default(0)
+  /// Số lần nhập SAI. Bắt buộc với OTP: rate limit theo IP không cản được kẻ
+  /// xoay vòng IP. Chạm ngưỡng thì token bị huỷ.
+  attempts Int @default(0)
 
   expiresAt DateTime  @db.Timestamptz(3)
   usedAt    DateTime? @db.Timestamptz(3)
@@ -516,22 +396,16 @@ enum DevicePlatform {
   WEB
 }
 
-/// ⚠️ `fcmToken` là UNIQUE TOÀN CỤC, không phải unique theo từng người dùng.
-///
-/// Một FCM token định danh MỘT LẦN CÀI APP TRÊN MỘT MÁY, không phải một cặp
-/// (người, máy). Ràng buộc theo `(userId, fcmToken)` cho phép hai dòng cùng
-/// token tồn tại song song khi hai tài khoản lần lượt đăng nhập trên cùng một
-/// điện thoại — và thông báo riêng tư của người thứ nhất sẽ hiện trên màn hình
-/// người thứ hai.
-///
-/// Đăng ký lại dưới tài khoản khác thì CHUYỂN CHỦ dòng đó (xem DeviceService),
-/// không tạo dòng mới.
+/// ⚠️ `fcmToken` UNIQUE TOÀN CỤC, không phải theo từng người dùng. Nó định danh
+/// một lần cài app trên một máy. Ràng buộc theo `(userId, fcmToken)` cho phép
+/// hai dòng cùng token tồn tại khi hai tài khoản lần lượt đăng nhập trên cùng
+/// điện thoại — và thông báo của người này hiện trên màn hình người kia.
+/// Đăng ký dưới tài khoản khác thì CHUYỂN CHỦ dòng đó (xem `DeviceService`).
 model UserDevice {
   id         String         @id @default(cuid())
   userId     String
   user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   platform   DevicePlatform
-  /// Token nhận push (FCM/APNs).
   fcmToken   String         @unique
   /// UUID phần cứng do client sinh, ổn định qua các lần cài lại app.
   deviceId   String?
@@ -548,11 +422,8 @@ model UserDevice {
 }
 
 enum NotificationType {
-  /// Gửi tới một số người cụ thể.
   DIRECT
-  /// Gửi theo nhóm/chủ đề.
   TOPIC
-  /// Gửi toàn hệ thống.
   BROADCAST
 }
 
@@ -566,7 +437,7 @@ model Notification {
   /// Điều hướng khi bấm: "/orders/123" hoặc URL tuyệt đối.
   actionUrl String?
   data      Json?
-  /// Chuỗi trần, không khoá ngoại — cùng lý do với `AuditLog.actorId`.
+  /// Chuỗi trần, không khoá ngoại — như `AuditLog.actorId`.
   senderId  String?
   createdAt DateTime         @default(now()) @db.Timestamptz(3)
 
@@ -576,8 +447,7 @@ model Notification {
   @@map("notifications")
 }
 
-/// Trạng thái nhận/đọc của từng người. Bảng này mới là thứ bị query liên tục
-/// (đếm số chưa đọc trên chuông), nên nó được giữ mỏng và đánh index kỹ.
+/// Trạng thái nhận/đọc của từng người — bảng bị query liên tục (đếm chuông).
 model NotificationRecipient {
   id             String @id @default(cuid())
   notificationId String
@@ -603,26 +473,17 @@ model NotificationRecipient {
 // 5. NHẬT KÝ KIỂM TOÁN
 // ============================================================
 
-/// Ghi lại HÀNH ĐỘNG NHẠY CẢM, không phải mọi request.
+/// Ghi HÀNH ĐỘNG NHẠY CẢM, không phải mọi request — ghi tất cả thì bảng phình
+/// tới mức không ai tra nổi.
 ///
-/// Nguyên tắc: ghi những việc mà sau này sẽ có người hỏi "ai làm cái này?" —
-/// đổi quyền, khoá tài khoản, xoá dữ liệu, đổi mật khẩu người khác. Ghi tất cả
-/// mọi thứ thì bảng phình nhanh tới mức không ai tra nổi, tức là mất luôn tác
-/// dụng.
-///
-/// ---
-/// ⚠️ KHÔNG CÓ KHOÁ NGOẠI TỚI `users`
-///
-/// Có chủ đích. Nhật ký phải sống lâu hơn đối tượng nó ghi lại: xoá cứng một
-/// tài khoản mà `onDelete: SetNull` xoá luôn `actorId` là mất danh tính của
-/// mọi hành động họ từng làm — đúng lúc cần tra nhất. `actorEmail` được chép
-/// lại tại thời điểm ghi, nên nhật ký vẫn đọc được sau khi người đó biến mất.
+/// ⚠️ KHÔNG có khoá ngoại tới `users`: nhật ký phải sống lâu hơn đối tượng nó
+/// ghi lại. `actorEmail` được chép tại thời điểm ghi.
 model AuditLog {
   id         String   @id @default(cuid())
-  /// null = hệ thống tự làm (cron, webhook). Chuỗi trần, không khoá ngoại.
+  /// null = hệ thống tự làm (cron, webhook).
   actorId    String?
   actorEmail String?
-  /// Quy ước: `<thực-thể>.<hành-động>` — "user.banned", "role.updated".
+  /// `<thực-thể>.<hành-động>` — "user.banned", "role.updated".
   action     String
   entity     String
   entityId   String?

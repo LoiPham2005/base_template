@@ -69,6 +69,15 @@ export const RATE_LIMITS = {
    */
   passkey: { limit: 30, windowSeconds: 300 },
 
+  /**
+   * Xin mã OTP qua SMS — ngưỡng theo IP.
+   *
+   * Đây mới chỉ là lớp thứ nhất. Hai lớp còn lại (giãn cách và trần theo ngày
+   * trên từng SỐ ĐIỆN THOẠI) nằm trong `AuthService.requestPhoneVerification`,
+   * vì chỉ ở đó mới biết số điện thoại là gì.
+   */
+  phoneOtp: { limit: 5, windowSeconds: 900 },
+
   /** Xin link upload — chặn việc bơm rác vào kho lưu trữ. */
   upload: { limit: 60, windowSeconds: 300 },
 } as const satisfies Record<string, RateLimitOptions>;

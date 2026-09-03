@@ -69,6 +69,20 @@ export class AccountBannedError extends DomainError {
   }
 }
 
+/**
+ * Tài khoản đang tạm ngưng (`UserStatus.INACTIVE`).
+ *
+ * Tách khỏi `AccountBannedError` vì thông điệp phải khác: BANNED là hình phạt
+ * do vi phạm, INACTIVE chỉ là tạm dừng — người dùng cần biết họ nên hỏi ai để
+ * mở lại, thay vì nghĩ mình đã làm gì sai.
+ */
+export class AccountInactiveError extends DomainError {
+  readonly code = "ACCOUNT_BANNED" as const;
+  constructor() {
+    super("Tài khoản đang tạm ngưng hoạt động. Vui lòng liên hệ quản trị viên.");
+  }
+}
+
 /** Khoá tạm tự động do sai mật khẩu liên tiếp — tự hết hạn tại `lockedUntil`. */
 export class AccountLockedError extends DomainError {
   readonly code = "ACCOUNT_LOCKED" as const;
@@ -339,5 +353,51 @@ export class WebAuthnVerificationError extends DomainError {
   readonly code = "VALIDATION_ERROR" as const;
   constructor() {
     super("Không xác minh được passkey. Vui lòng thử lại.");
+  }
+}
+
+/**
+ * Chốt chặn đăng nhập theo trạng thái tài khoản. Gọi ở MỌI đường vào:
+ * mật khẩu, OAuth, passkey.
+ *
+ * Gom vào một hàm thay vì lặp `if (status === "BANNED")` ở từng service — bốn
+ * chỗ kiểm tra riêng lẻ là bốn cơ hội để một đường đăng nhập mới quên mất luật.
+ *
+ * `INACTIVE` cố ý CŨNG bị chặn: nó nghĩa là "tạm ngưng". Nếu dự án của bạn cần
+ * "chưa xác thực email thì chưa cho vào", đừng dùng trạng thái này — đã có cột
+ * `emailVerifiedAt` riêng cho việc đó. Một cột một ý nghĩa.
+ */
+export function assertLoginAllowed(status: "ACTIVE" | "INACTIVE" | "BANNED"): void {
+  if (status === "BANNED") throw new AccountBannedError();
+  if (status === "INACTIVE") throw new AccountInactiveError();
+}
+
+// ---------------------------------------------------------------------------
+// Xác thực số điện thoại (SMS)
+// ---------------------------------------------------------------------------
+
+/** Luồng SMS chưa được bật (`PHONE_VERIFICATION_ENABLED=0`). */
+export class PhoneVerificationDisabledError extends DomainError {
+  readonly code = "FORBIDDEN" as const;
+  constructor() {
+    super("Tính năng xác thực số điện thoại chưa được bật trên hệ thống này");
+  }
+}
+
+/**
+ * Xin mã quá dày hoặc quá nhiều lần trong ngày, tính trên MỘT SỐ ĐIỆN THOẠI.
+ *
+ * Khác `TooManyVerificationAttemptsError` (nhập sai quá nhiều): lỗi này là về
+ * việc GỬI, và nó tồn tại vì mỗi tin nhắn tốn tiền thật. Rate limit theo IP
+ * không cản được kẻ xoay vòng IP nhắm vào một số.
+ */
+export class PhoneOtpThrottledError extends DomainError {
+  readonly code = "RATE_LIMITED" as const;
+  constructor(retryAfterSeconds: number) {
+    super(
+      retryAfterSeconds >= 3600
+        ? "Số điện thoại này đã nhận quá nhiều mã hôm nay. Vui lòng thử lại vào ngày mai."
+        : `Vui lòng đợi ${retryAfterSeconds} giây trước khi yêu cầu mã mới.`,
+    );
   }
 }

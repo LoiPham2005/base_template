@@ -9,12 +9,14 @@ import { CryptoUtils } from "../common/crypto";
 import { env } from "../config/env";
 import { logger } from "../common/logger";
 import {
-  AccountBannedError,
   AccountLockedError,
   DuplicateFieldError,
   InvalidCredentialsError,
   InvalidVerificationTokenError,
+  PhoneOtpThrottledError,
+  PhoneVerificationDisabledError,
   TwoFactorRequiredError,
+  assertLoginAllowed,
 } from "../common/errors";
 import {
   sendEmailChangeNoticeEmail,
@@ -23,9 +25,13 @@ import {
   sendPasswordResetEmail,
   sendVerificationEmail,
 } from "../infra/emails";
+import { sendPhoneOtpSms } from "../infra/sms";
+import { isPhoneVerificationEnabled } from "../infra/smser";
+import { rateLimit } from "../infra/rate-limit";
 import { UserService, toPublicUser } from "../user/user.service";
 import type { VerificationService } from "./verification.service";
 import type { TokenService } from "./token.service";
+import type { SecurityStampService } from "./security-stamp.service";
 
 /**
  * Luồng xác thực: đăng ký, đăng nhập, xác thực email, đặt lại / đổi mật khẩu.
@@ -41,6 +47,7 @@ export class AuthService {
     private readonly users: UserService,
     private readonly verification: VerificationService,
     private readonly tokens: TokenService,
+    private readonly securityStamp: SecurityStampService,
   ) {}
 
   /**
@@ -124,7 +131,7 @@ export class AuthService {
       throw new InvalidCredentialsError();
     }
 
-    if (user.status === "BANNED") throw new AccountBannedError();
+    assertLoginAllowed(user.status);
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
       throw new AccountLockedError(user.lockedUntil);
@@ -176,7 +183,7 @@ export class AuthService {
     const user = await this.users.findById(userId);
     if (!user) throw new InvalidCredentialsError();
 
-    if (user.status === "BANNED") throw new AccountBannedError();
+    assertLoginAllowed(user.status);
 
     return user;
   }
@@ -322,11 +329,19 @@ export class AuthService {
 
     const user = await this.db.user.update({
       where: { id: userId },
-      data: { password, failedLoginAttempts: 0, lockedUntil: null },
+      data: {
+        password,
+        passwordChangedAt: new Date(),
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      },
       select: { id: true, email: true },
     });
 
     await this.tokens.revokeAllForUser(userId);
+    // Refresh token đã thu hồi ở trên, nhưng access token đang cầm thì chưa —
+    // dòng này mới là thứ đá kẻ tấn công ra NGAY thay vì sau 15 phút.
+    await this.securityStamp.invalidate(userId);
 
     if (user.email) {
       await sendPasswordChangedEmail(user.email).catch((error: unknown) => {
@@ -433,6 +448,105 @@ export class AuthService {
     return user;
   }
 
+  // -------------------------------------------------------------------------
+  // Xác thực số điện thoại (SMS)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Gửi mã OTP tới số điện thoại mà người dùng muốn gắn vào tài khoản.
+   *
+   * ---
+   * BA LỚP CHẶN LẠM DỤNG, VÀ VÌ SAO CẦN ĐỦ CẢ BA
+   *
+   * Đây là endpoint DUY NHẤT trong bộ khung có chi phí trực tiếp trên mỗi lần
+   * gọi. Một lỗ hổng ở đây không dẫn tới mất dữ liệu — nó dẫn tới một hoá đơn.
+   *
+   *   1. Rate limit theo IP — do `@RateLimit("phoneOtp")` ở tầng HTTP lo.
+   *      Chặn một máy bắn liên tục. KHÔNG chặn được kẻ xoay vòng IP.
+   *   2. **Giãn cách theo SỐ ĐIỆN THOẠI** (mặc định 60 giây). Chặn "SMS
+   *      bombing": nhiều IP cùng dội mã vào một nạn nhân để quấy rối.
+   *   3. **Trần theo NGÀY trên số điện thoại** (mặc định 5). Chặn kẻ kiên nhẫn
+   *      gửi đều tay suốt 24 giờ.
+   *
+   * Lớp 2 và 3 khoá theo SỐ, không theo người dùng — vì kẻ tấn công tạo được
+   * nhiều tài khoản, nhưng số điện thoại nạn nhân thì chỉ có một.
+   */
+  async requestPhoneVerification(userId: string, phone: string): Promise<void> {
+    if (!isPhoneVerificationEnabled()) throw new PhoneVerificationDisabledError();
+
+    const normalized = normalizePhone(phone);
+
+    // Kiểm TRƯỚC khi gửi: báo lỗi tử tế, và quan trọng hơn — không tiêu một tin
+    // nhắn cho một số mà cuối cùng vẫn không gắn được.
+    const taken = await this.db.user.findFirst({
+      where: { phone: normalized, deletedAt: null, NOT: { id: userId } },
+      select: { id: true },
+    });
+    if (taken) throw new DuplicateFieldError("phone", normalized);
+
+    const cooldown = await rateLimit(`otp:cooldown:${normalized}`, {
+      limit: 1,
+      windowSeconds: env.PHONE_OTP_RESEND_COOLDOWN_SECONDS,
+    });
+    if (!cooldown.success) throw new PhoneOtpThrottledError(cooldown.retryAfterSeconds);
+
+    const daily = await rateLimit(`otp:daily:${normalized}`, {
+      limit: env.PHONE_OTP_MAX_PER_DAY,
+      windowSeconds: 24 * 60 * 60,
+    });
+    if (!daily.success) throw new PhoneOtpThrottledError(daily.retryAfterSeconds);
+
+    // `destination` giữ số điện thoại đang chờ — đúng khuôn `EMAIL_CHANGE`.
+    // Số chỉ được ghi vào `user.phone` sau khi mã được xác nhận.
+    const { token } = await this.verification.issue(userId, "PHONE_OTP", normalized);
+
+    await sendPhoneOtpSms(normalized, token);
+  }
+
+  /**
+   * Xác nhận mã OTP và gắn số điện thoại vào tài khoản.
+   *
+   * Số điện thoại lấy từ `destination` của chính bản ghi token, KHÔNG nhận lại
+   * từ client — nếu nhận, người dùng gửi mã của số A kèm số B là gắn được số
+   * chưa hề xác thực.
+   */
+  async confirmPhoneVerification(userId: string, code: string): Promise<PublicUser> {
+    if (!isPhoneVerificationEnabled()) throw new PhoneVerificationDisabledError();
+
+    const pending = await this.db.verificationToken.findFirst({
+      where: { userId, type: "PHONE_OTP", usedAt: null },
+      orderBy: { createdAt: "desc" },
+      select: { destination: true },
+    });
+
+    if (!pending?.destination) throw new InvalidVerificationTokenError();
+
+    // `consumeOtp` băm kèm `userId` và tự đếm số lần nhập sai — xem
+    // `VerificationService`.
+    if (!(await this.verification.consumeOtp(userId, "PHONE_OTP", code))) {
+      throw new InvalidVerificationTokenError();
+    }
+
+    try {
+      await this.db.user.update({
+        where: { id: userId },
+        data: { phone: pending.destination, phoneVerifiedAt: new Date() },
+      });
+    } catch (error) {
+      // Ai đó vừa đăng ký số này trong lúc chờ — partial unique index chặn.
+      if ((error as { code?: string }).code === "P2002") {
+        throw new DuplicateFieldError("phone", pending.destination);
+      }
+      throw error;
+    }
+
+    const user = await this.users.findById(userId);
+    if (!user) throw new InvalidVerificationTokenError();
+
+    logger.info("Đã xác thực số điện thoại", { userId });
+    return user;
+  }
+
   /**
    * Đổi mật khẩu khi đang đăng nhập.
    *
@@ -464,8 +578,12 @@ export class AuthService {
 
     const password = await CryptoUtils.hashPassword(newPassword);
 
-    await this.db.user.update({ where: { id: userId }, data: { password } });
+    await this.db.user.update({
+      where: { id: userId },
+      data: { password, passwordChangedAt: new Date() },
+    });
     await this.tokens.revokeAllForUser(userId, { exceptFamilyId: keepFamilyId });
+    await this.securityStamp.invalidate(userId);
 
     if (user.email) {
       await sendPasswordChangedEmail(user.email).catch((error: unknown) => {
@@ -475,4 +593,19 @@ export class AuthService {
 
     logger.info("Mật khẩu được đổi", { userId });
   }
+}
+
+/**
+ * Chuẩn hoá số điện thoại về một dạng duy nhất trước khi lưu hoặc tra cứu.
+ *
+ * `0912345678` và `+84912345678` là CÙNG một số, nhưng với database thì là hai
+ * chuỗi khác nhau. Không chuẩn hoá thì cùng một người đăng ký được hai lần, và
+ * trần OTP theo ngày bị lách chỉ bằng cách đổi cách viết.
+ *
+ * Quy về dạng `0…` vì đó là dạng người Việt gõ và là dạng nhà cung cấp SMS
+ * trong nước nhận.
+ */
+function normalizePhone(phone: string): string {
+  const digits = phone.trim().replace(/[\s.-]/g, "");
+  return digits.startsWith("+84") ? `0${digits.slice(3)}` : digits;
 }

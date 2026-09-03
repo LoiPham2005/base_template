@@ -5,6 +5,7 @@ import {
   AuthService,
   OAuthService,
   PermissionService,
+  SecurityStampService,
   TokenService,
   TwoFactorService,
   UserService,
@@ -50,6 +51,7 @@ import { SessionService } from "./session.service";
     { provide: PermissionService, useValue: core.permission },
     { provide: OAuthService, useValue: core.oauth },
     { provide: TwoFactorService, useValue: core.twoFactor },
+    { provide: SecurityStampService, useValue: core.securityStamp },
     { provide: WebAuthnService, useValue: core.webauthn },
     { provide: AuditService, useValue: core.audit },
   ],
@@ -63,6 +65,7 @@ import { SessionService } from "./session.service";
     OAuthService,
     TwoFactorService,
     WebAuthnService,
+    SecurityStampService,
     AuditService,
   ],
 })

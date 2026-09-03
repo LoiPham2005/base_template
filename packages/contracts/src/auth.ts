@@ -3,6 +3,7 @@ import {
   emailSchema,
   fullNameSchema,
   passwordSchema,
+  phoneSchema,
   publicUserSchema,
   usernameSchema,
 } from "./user";
@@ -251,3 +252,19 @@ export const passkeySchema = z.object({
   createdAt: z.coerce.date(),
 });
 export type Passkey = z.infer<typeof passkeySchema>;
+
+// ---------------------------------------------------------------------------
+// Xác thực số điện thoại (SMS)
+// ---------------------------------------------------------------------------
+
+export const requestPhoneOtpSchema = z.object({ phone: phoneSchema });
+export type RequestPhoneOtpInput = z.infer<typeof requestPhoneOtpSchema>;
+
+export const verifyPhoneOtpSchema = z.object({
+  /** 6 chữ số. Chấp nhận khoảng trắng người dùng dán kèm. */
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, "Mã xác thực gồm 6 chữ số"),
+});
+export type VerifyPhoneOtpInput = z.infer<typeof verifyPhoneOtpSchema>;

@@ -109,6 +109,7 @@ services:
       APP_NAME: ${APP_NAME:-Base Template}
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
       WEBAUTHN_ORIGINS: ${WEBAUTHN_ORIGINS:-}
+      PHONE_VERIFICATION_ENABLED: ${PHONE_VERIFICATION_ENABLED:-0}
     # Cố ý KHÔNG publish cổng 3001: chỉ `web` và reverse proxy cần gọi API. Mở
     # ra Internet là đi vòng qua cả TLS lẫn rate limit của proxy.
     expose:
@@ -146,6 +147,7 @@ services:
       WORKER_HEALTH_PORT: 3002
       APP_URL: ${APP_URL:?APP_URL là bắt buộc — worker dựng link trong email}
       APP_NAME: ${APP_NAME:-Base Template}
+      PHONE_VERIFICATION_ENABLED: ${PHONE_VERIFICATION_ENABLED:-0}
     # `QUEUE_ENABLED=0` là container này KHÔNG được dựng, và `docker compose
     # up -d` sẽ GỠ nó nếu đang chạy. Dùng chung một biến với app là để không
     # bao giờ có chuyện app đẩy job vào Redis trong khi không worker nào chạy.

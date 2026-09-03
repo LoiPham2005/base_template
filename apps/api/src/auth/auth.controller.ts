@@ -43,10 +43,12 @@ import {
   RefreshDto,
   RegisterDto,
   RequestEmailChangeDto,
+  RequestPhoneOtpDto,
   ResendVerificationDto,
   ResetPasswordDto,
   UpdateProfileDto,
   VerifyEmailDto,
+  VerifyPhoneOtpDto,
   VerifyTwoFactorDto,
 } from "./auth.dto";
 
@@ -411,6 +413,57 @@ export class AuthController {
     });
 
     return user;
+  }
+
+  // -------------------------------------------------------------------------
+  // Xác thực số điện thoại (SMS)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Gửi mã OTP tới số điện thoại người dùng muốn gắn vào tài khoản.
+   *
+   * ⚠️ Đây là endpoint DUY NHẤT trong hệ thống có chi phí TRỰC TIẾP trên mỗi
+   * lần gọi. Ngoài `@RateLimit("phoneOtp")` theo IP ở đây, `AuthService` còn
+   * chặn theo giãn cách và trần-theo-ngày trên chính SỐ ĐIỆN THOẠI — vì kẻ
+   * tấn công xoay IP được, còn số nạn nhân thì chỉ có một.
+   *
+   * Mặc định TẮT (`PHONE_VERIFICATION_ENABLED=0`).
+   */
+  @RateLimit("phoneOtp")
+  @Post("phone/request-otp")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Gửi mã OTP để gắn số điện thoại (mặc định tắt)" })
+  async requestPhoneOtp(
+    @CurrentUser("sub") userId: string,
+    @Body() dto: RequestPhoneOtpDto,
+  ): Promise<void> {
+    await this.auth.requestPhoneVerification(userId, dto.phone);
+  }
+
+  @RateLimit("phoneOtp")
+  @Post("phone/verify")
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Xác nhận mã OTP và gắn số điện thoại" })
+  async verifyPhoneOtp(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: VerifyPhoneOtpDto,
+    @Req() request: FastifyRequest,
+  ): Promise<PublicUser> {
+    const result = await this.auth.confirmPhoneVerification(user.sub, dto.code);
+
+    await this.audit.record({
+      action: AUDIT_ACTIONS.PHONE_VERIFIED,
+      entity: "User",
+      entityId: user.sub,
+      actorId: user.sub,
+      actorEmail: user.email,
+      ip: clientIp(request),
+      userAgent: userAgent(request),
+    });
+
+    return result;
   }
 
   // -------------------------------------------------------------------------

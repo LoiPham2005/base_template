@@ -35,6 +35,8 @@ packages/
 - **2FA (TOTP)**: Google Authenticator/Authy/1Password, mã khôi phục, bí mật
   mã hoá AES-256-GCM trong database
 - **Đổi email an toàn**: xác thực địa chỉ mới + cảnh báo địa chỉ cũ
+- **Xác thực SĐT qua SMS** — _mặc định TẮT_ vì tốn phí; ba lớp chống đốt tiền
+- Đổi mật khẩu **thu hồi tức thì** mọi access token cũ (không đợi hết 15 phút)
 - OAuth Google / GitHub / Facebook / Apple (PKCE, state ký JWT)
 
 **Phân quyền (RBAC)**

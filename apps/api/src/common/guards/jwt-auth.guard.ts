@@ -1,6 +1,7 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { JwtService } from "@nestjs/jwt";
+import { SecurityStampService } from "@repo/core";
 import type { FastifyRequest } from "fastify";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 import type {
@@ -26,6 +27,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly jwt: JwtService,
     private readonly reflector: Reflector,
+    private readonly securityStamp: SecurityStampService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -84,6 +86,23 @@ export class JwtAuthGuard implements CanActivate {
      */
     if (payload.typ !== "access") {
       throw new UnauthorizedException("Token không dùng được cho endpoint này");
+    }
+
+    /*
+     * Token còn hạn, chữ ký đúng, đúng loại — nhưng mật khẩu có thể đã đổi SAU
+     * khi nó được cấp.
+     *
+     * JWT không thu hồi được, nên không có phép kiểm này thì kẻ đã chiếm tài
+     * khoản vẫn thao tác thêm được tới 15 phút sau khi chủ thật đổi mật khẩu.
+     * Giá trị so sánh nằm trong cache và bị xoá ngay trong luồng đổi mật khẩu,
+     * nên hiệu lực là tức thì.
+     */
+    if (payload.iat !== undefined) {
+      const stillValid = await this.securityStamp.isTokenStillValid(payload.sub, payload.iat);
+
+      if (!stillValid) {
+        throw new UnauthorizedException("Phiên đã hết hiệu lực. Vui lòng đăng nhập lại.");
+      }
     }
 
     request.user = payload;

@@ -35,6 +35,7 @@ const USER_SELECT = {
   username: true,
   status: true,
   emailVerifiedAt: true,
+  lockedUntil: true,
   twoFactorEnabledAt: true,
   createdAt: true,
   updatedAt: true,
@@ -487,6 +488,32 @@ export class UserService {
       }
 
       return updated;
+    });
+
+    return toPublicUser(row);
+  }
+
+  /**
+   * Mở khoá tạm do sai mật khẩu liên tiếp, KHÔNG đụng tới `status`.
+   *
+   * Khác `setStatus("ACTIVE")` ở chỗ đó: `lockedUntil` là hệ quả của
+   * brute-force, còn `status` là quyết định hành chính. Gộp hai việc lại thì
+   * "mở khoá cho người gõ nhầm mật khẩu" vô tình gỡ luôn lệnh đình chỉ mà quản
+   * trị viên khác vừa đặt.
+   */
+  async unlock(id: string, options: { actorId?: string | null } = {}): Promise<PublicUser> {
+    await this.assertCanActOn(options.actorId, id);
+
+    const existing = await this.db.user.findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!existing) throw new UserNotFoundError(id);
+
+    const row = await this.db.user.update({
+      where: { id },
+      data: { lockedUntil: null, failedLoginAttempts: 0 },
+      select: USER_SELECT,
     });
 
     return toPublicUser(row);

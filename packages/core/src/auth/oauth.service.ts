@@ -113,6 +113,7 @@ export class OAuthService {
         username: true,
         status: true,
         emailVerifiedAt: true,
+        lockedUntil: true,
         twoFactorEnabledAt: true,
         createdAt: true,
         updatedAt: true,

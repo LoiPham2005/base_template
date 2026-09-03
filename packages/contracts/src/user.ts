@@ -66,6 +66,14 @@ export const publicUserSchema = z.object({
   avatarUrl: z.string().nullable(),
   status: userStatusSchema,
   emailVerifiedAt: z.coerce.date().nullable(),
+  /**
+   * Khoá TẠM do sai mật khẩu liên tiếp; `null` = không bị khoá.
+   *
+   * Có mặt ở đây vì màn quản trị phải phân biệt được "bị đình chỉ"
+   * (`status = BANNED`, quyết định hành chính) với "đang khoá tạm" (tự hết
+   * hạn) — hai thứ cần hai nút bấm khác nhau.
+   */
+  lockedUntil: z.coerce.date().nullable(),
   /** `true` khi tài khoản đã bật xác thực hai lớp. */
   twoFactorEnabled: z.boolean().default(false),
   /** Khoá của mọi vai trò đang mang, ví dụ `["ADMIN", "STAFF"]`. */

@@ -12,24 +12,24 @@
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
     "@repo/contracts": "workspace:*",
+    "@simplewebauthn/browser": "^13.2.2",
     "@tanstack/react-query": "^5.62.11",
-    "next": "^16.2.12",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "next": "^16.3.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "react-hook-form": "^7.54.2",
     "server-only": "^0.0.1",
-    "zod": "^3.25.76",
-    "@simplewebauthn/browser": "^13.2.2"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
     "@repo/tsconfig": "workspace:*",
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "eslint": "^9.17.0",
-    "typescript": "^5.7.2",
     "tailwindcss": "^4.3.3",
-    "@tailwindcss/postcss": "^4.3.3"
+    "typescript": "^5.7.2"
   }
 }

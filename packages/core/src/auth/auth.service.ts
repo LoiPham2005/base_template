@@ -162,12 +162,7 @@ export class AuthService {
      */
     if (user.twoFactorEnabledAt) throw new TwoFactorRequiredError(user.id);
 
-    const {
-      password: _password,
-      failedLoginAttempts: _attempts,
-      lockedUntil: _locked,
-      ...rest
-    } = user;
+    const { password: _password, failedLoginAttempts: _attempts, ...rest } = user;
     return toPublicUser(rest);
   }
 

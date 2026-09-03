@@ -28,6 +28,8 @@
     "CORS_ORIGIN",
     "APP_URL",
     "API_PUBLIC_URL",
+    "APP_NAME",
+    "ENCRYPTION_KEY",
     "API_URL",
     "PORT",
     "REDIS_URL",

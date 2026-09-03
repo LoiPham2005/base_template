@@ -28,7 +28,8 @@ export type DomainErrorCode =
   | "ACCOUNT_BANNED"
   | "ACCOUNT_LOCKED"
   | "RATE_LIMITED"
-  | "PROVIDER_ERROR";
+  | "PROVIDER_ERROR"
+  | "TWO_FACTOR_REQUIRED";
 
 export abstract class DomainError extends Error {
   abstract readonly code: DomainErrorCode;
@@ -243,5 +244,79 @@ export class OAuthEmailRequiredError extends DomainError {
       `Tài khoản ${provider} của bạn không có email đã xác thực để liên kết. ` +
         `Vui lòng công khai/xác thực email trên ${provider} rồi thử lại.`,
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Xác thực hai lớp (2FA)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mật khẩu ĐÚNG, nhưng tài khoản có bật 2FA — chưa cấp token thật.
+ *
+ * Không phải lỗi theo nghĩa thông thường: đây là một bước trong luồng đăng
+ * nhập. `challengeToken` là vé đi tiếp, gửi kèm mã TOTP tới
+ * `POST /auth/2fa/verify`.
+ *
+ * Client PHẢI phân biệt nó với 401 thật (sai mật khẩu) — đó là lý do nó có mã
+ * riêng thay vì dùng chung `UNAUTHENTICATED`.
+ */
+export class TwoFactorRequiredError extends DomainError {
+  readonly code = "TWO_FACTOR_REQUIRED" as const;
+  constructor(readonly userId: string) {
+    super("Tài khoản có bật xác thực hai lớp. Vui lòng nhập mã từ ứng dụng xác thực.");
+  }
+}
+
+export class InvalidTwoFactorCodeError extends DomainError {
+  readonly code = "UNAUTHENTICATED" as const;
+  constructor() {
+    super("Mã xác thực không đúng hoặc đã hết hiệu lực");
+  }
+}
+
+export class TwoFactorAlreadyEnabledError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor() {
+    super("Xác thực hai lớp đã được bật cho tài khoản này");
+  }
+}
+
+export class TwoFactorNotEnabledError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor() {
+    super("Xác thực hai lớp chưa được bật cho tài khoản này");
+  }
+}
+
+/**
+ * Mã dùng-một-lần bị nhập sai quá số lần cho phép.
+ *
+ * Tách khỏi `InvalidVerificationTokenError` vì thông điệp phải khác: người
+ * dùng cần biết họ phải XIN MÃ MỚI, chứ không phải thử lại lần nữa.
+ */
+export class TooManyVerificationAttemptsError extends DomainError {
+  readonly code = "RATE_LIMITED" as const;
+  constructor() {
+    super("Bạn đã nhập sai quá nhiều lần. Mã đã bị huỷ — vui lòng yêu cầu mã mới.");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bậc quyền lực
+// ---------------------------------------------------------------------------
+
+/**
+ * Chặn leo thang đặc quyền: thao tác lên một người ngang hoặc mạnh hơn mình,
+ * hoặc gán một vai trò mạnh hơn bậc của chính mình.
+ *
+ * Không có chốt này thì bất kỳ ai có `user:create` đều tạo được một tài khoản
+ * SUPER_ADMIN rồi đăng nhập vào đó — và chốt "không tự đổi vai trò của chính
+ * mình" không cứu được, vì họ tạo tài khoản KHÁC.
+ */
+export class InsufficientRoleLevelError extends DomainError {
+  readonly code = "FORBIDDEN" as const;
+  constructor(message = "Bạn không đủ thẩm quyền để thao tác lên tài khoản hoặc vai trò này") {
+    super(message);
   }
 }

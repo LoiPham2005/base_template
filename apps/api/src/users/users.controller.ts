@@ -192,6 +192,7 @@ export class UsersController {
   ) {
     await this.users.setUserPermission(id, dto.permissionKey, dto.isGranted, {
       actorId: actor.sub,
+      expiresAt: dto.expiresAt ?? null,
     });
     await this.permissions.invalidateUser(id);
 
@@ -201,7 +202,11 @@ export class UsersController {
       entityId: id,
       actorId: actor.sub,
       actorEmail: actor.email,
-      metadata: { permissionKey: dto.permissionKey, isGranted: dto.isGranted },
+      metadata: {
+        permissionKey: dto.permissionKey,
+        isGranted: dto.isGranted,
+        expiresAt: dto.expiresAt?.toISOString() ?? null,
+      },
       ip: clientIp(request),
       userAgent: userAgent(request),
     });

@@ -93,8 +93,11 @@ export class OAuthController {
     // `state` mang theo `codeVerifier` — đó là lý do nó phải được KÝ chứ không
     // chỉ là chuỗi ngẫu nhiên: bất kỳ ai sửa được nội dung này là vô hiệu hoá
     // luôn PKCE.
+    // `typ` để `JwtAuthGuard` từ chối token này nếu ai đó thử dùng nó làm
+    // access token — mọi JWT ở đây đều ký bằng cùng một khoá, nên chữ ký hợp lệ
+    // không có nghĩa là dùng được ở mọi nơi.
     const state = await this.jwt.signAsync(
-      { provider: id, codeVerifier, nonce },
+      { typ: "oauth_state", provider: id, codeVerifier, nonce },
       { expiresIn: OAuthController.STATE_TTL },
     );
 
@@ -156,11 +159,15 @@ export class OAuthController {
         return await this.redirectToWeb(reply, { error: "oauth_invalid_response" });
       }
 
-      const claims = await this.jwt.verifyAsync<{ provider: string; codeVerifier: string }>(state);
+      const claims = await this.jwt.verifyAsync<{
+        typ?: string;
+        provider: string;
+        codeVerifier: string;
+      }>(state);
 
-      // `state` hợp lệ nhưng của provider KHÁC: dấu hiệu ai đó đang ghép hai
-      // luồng lại với nhau.
-      if (claims.provider !== id) {
+      // Sai loại token, hoặc `state` của provider KHÁC: cả hai đều là dấu hiệu
+      // ai đó đang ghép các luồng lại với nhau.
+      if (claims.typ !== "oauth_state" || claims.provider !== id) {
         return await this.redirectToWeb(reply, { error: "oauth_state_mismatch" });
       }
 
@@ -184,7 +191,7 @@ export class OAuthController {
       // trong log của proxy, và trong header `Referer` gửi sang mọi ảnh trên
       // trang kế tiếp. Mã một lần thì đổi xong là hết giá trị.
       const exchangeCode = await this.jwt.signAsync(
-        { sub: user.id, pair },
+        { typ: "oauth_exchange", sub: user.id, pair },
         { expiresIn: OAuthController.EXCHANGE_TTL },
       );
 
@@ -209,7 +216,12 @@ export class OAuthController {
     if (!body.code) throw new BadRequestException("Thiếu mã trao đổi");
 
     try {
-      const claims = await this.jwt.verifyAsync<{ sub: string; pair: unknown }>(body.code);
+      const claims = await this.jwt.verifyAsync<{ typ?: string; sub: string; pair: unknown }>(
+        body.code,
+      );
+
+      if (claims.typ !== "oauth_exchange") throw new Error("sai loại token");
+
       return claims.pair;
     } catch {
       throw new BadRequestException("Mã trao đổi không hợp lệ hoặc đã hết hạn");

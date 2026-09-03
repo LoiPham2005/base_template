@@ -47,7 +47,8 @@ export class JwtAuthGuard implements CanActivate {
        */
       if (token) {
         try {
-          request.user = await this.jwt.verifyAsync<CurrentUserPayload>(token);
+          const payload = await this.jwt.verifyAsync<CurrentUserPayload>(token);
+          if (payload.typ === "access") request.user = payload;
         } catch {
           // Cố ý im lặng.
         }
@@ -59,13 +60,33 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException("Vui lòng cung cấp Access Token hợp lệ");
     }
 
+    let payload: CurrentUserPayload;
+
     try {
-      request.user = await this.jwt.verifyAsync<CurrentUserPayload>(token);
+      payload = await this.jwt.verifyAsync<CurrentUserPayload>(token);
     } catch {
       // Không phân biệt "hết hạn" với "chữ ký sai" trong thông báo: client chỉ
       // cần biết phải gọi `/auth/refresh` rồi thử lại.
       throw new UnauthorizedException("Access Token không hợp lệ hoặc đã hết hạn");
     }
+
+    /*
+     * DANH SÁCH TRẮNG THEO LOẠI TOKEN — chốt chặn quan trọng nhất của guard này.
+     *
+     * Mọi JWT trong hệ thống đều ký bằng cùng một khoá, nên chữ ký hợp lệ KHÔNG
+     * có nghĩa là token này dùng được ở đây. Thiếu phép kiểm dưới đây thì một
+     * vé 2FA — thứ chỉ chứng minh "vừa nhập đúng mật khẩu" — sẽ được nhận như
+     * một access token hoàn chỉnh, tức là bước thứ hai của 2FA bị bỏ qua hoàn
+     * toàn. `state` của OAuth cũng vậy.
+     *
+     * Dùng danh sách trắng chứ không phải danh sách đen: loại token thêm sau
+     * này bị từ chối theo mặc định.
+     */
+    if (payload.typ !== "access") {
+      throw new UnauthorizedException("Token không dùng được cho endpoint này");
+    }
+
+    request.user = payload;
 
     return true;
   }

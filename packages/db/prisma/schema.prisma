@@ -5,10 +5,19 @@
 //
 // Bố cục:
 //   1. RBAC        — Role / Permission / gán theo vai trò & theo từng người
-//   2. Người dùng  — User (chỉ phục vụ xác thực) + UserProfile (thông tin cá nhân)
+//   2. Người dùng  — User (chỉ phục vụ xác thực) + UserProfile + 2FA
 //   3. Phiên & token — OAuthAccount / RefreshToken / VerificationToken
 //   4. Thiết bị & thông báo
 //   5. Nhật ký kiểm toán
+//
+// ---
+// QUY ƯỚC: MỌI CỘT THỜI GIAN LÀ `Timestamptz`
+//
+// Mặc định của Prisma là `timestamp(3)` KHÔNG có múi giờ. Đi qua Prisma thì
+// vẫn đúng (nó quy về UTC), nhưng khoảnh khắc có một câu SQL viết tay, một
+// công cụ như DBeaver, hay một `DEFAULT now()` phía database chen vào là giá
+// trị lệch đi vài tiếng mà không có gì báo. Với hệ thống xác thực — nơi
+// `expiresAt` và `lockedUntil` quyết định ai vào được — đó là loại lỗi tệ nhất.
 
 generator client {
   provider = "prisma-client-js"
@@ -17,6 +26,9 @@ generator client {
 datasource db {
   // Đổi sang "mysql" / "sqlite" ở đây nếu dự án cần — không file nào ngoài
   // file này phụ thuộc vào provider.
+  //
+  // ⚠️ Ngoại lệ: các partial unique index trong migration init là cú pháp
+  // PostgreSQL. Đổi provider thì phải viết lại chúng.
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
@@ -35,6 +47,22 @@ model Role {
   key         String  @unique
   name        String
   description String?
+
+  /// BẬC QUYỀN LỰC. Cao hơn = mạnh hơn.
+  ///
+  /// Đây là thứ ngăn leo thang đặc quyền. Không có nó, bất kỳ ai có quyền
+  /// `user:create` đều tạo được một tài khoản mang vai trò SUPER_ADMIN rồi
+  /// đăng nhập vào đó — chốt "không tự đổi vai trò của chính mình" không cứu
+  /// được, vì họ tạo tài khoản KHÁC.
+  ///
+  /// Luật (áp trong UserService): chỉ gán/gỡ được vai trò có `level` THẤP HƠN
+  /// HẲN bậc cao nhất của chính mình, và không đụng được vào người có bậc
+  /// bằng hoặc cao hơn mình.
+  ///
+  /// Thang mặc định của seed: USER 0 · STAFF 10 · MANAGER 20 · ADMIN 50 ·
+  /// SUPER_ADMIN 100. Chừa khoảng trống để chèn vai trò mới vào giữa.
+  level       Int     @default(0)
+
   /// Vai trò cốt lõi — không cho xoá, không cho đổi key. Xoá vai trò đang được
   /// gán cho người dùng là cách nhanh nhất để khoá toàn bộ hệ thống khỏi
   /// chính người quản trị.
@@ -43,9 +71,10 @@ model Role {
   permissions RolePermission[]
   userRoles   UserRole[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
+  @@index([level])
   @@map("roles")
 }
 
@@ -65,7 +94,7 @@ model Permission {
   roles           RolePermission[]
   userPermissions UserPermission[]
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([category])
   @@map("permissions")
@@ -78,7 +107,7 @@ model RolePermission {
   role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@id([roleId, permissionId])
   @@index([permissionId])
@@ -90,9 +119,10 @@ model RolePermission {
 model UserRole {
   userId String
   roleId String
-  /// Ai đã gán vai trò này. Phục vụ điều tra khi có người bỗng dưng có quyền.
+  /// Ai đã gán vai trò này. Chuỗi trần, KHÔNG có khoá ngoại — cùng lý do với
+  /// `AuditLog.actorId`: dấu vết phải sống lâu hơn người để lại nó.
   assignedBy String?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
@@ -112,13 +142,22 @@ model UserPermission {
   permissionId String
   isGranted    Boolean  @default(true)
   grantedBy    String?
-  createdAt    DateTime @default(now())
+
+  /// Hạn của ngoại lệ này. `null` = vĩnh viễn.
+  ///
+  /// "Cấp quyền này trong 24 giờ để xử lý sự cố" là nhu cầu rất thường gặp, và
+  /// không có cột này thì nó âm thầm thành vĩnh viễn — không ai nhớ quay lại
+  /// gỡ, và cũng không có gì nhắc.
+  expiresAt    DateTime? @db.Timestamptz(3)
+
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
 
   user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([userId, permissionId])
   @@index([permissionId])
+  @@index([expiresAt])
   @@map("user_permissions")
 }
 
@@ -142,29 +181,71 @@ enum UserStatus {
 /// bảng này bị đọc ở gần như mọi request xác thực, còn hồ sơ thì hiếm khi cần
 /// — và vì thông tin cá nhân là thứ chịu ràng buộc pháp lý (xoá theo yêu cầu,
 /// xuất dữ liệu), dễ xử lý hơn nhiều khi nó nằm gọn một chỗ.
+///
+/// ---
+/// ⚠️ `email` / `phone` / `username` KHÔNG dùng `@unique` CỦA PRISMA
+///
+/// Chúng được ràng buộc bằng **partial unique index** viết tay trong migration:
+///
+///     CREATE UNIQUE INDEX users_email_active_key
+///       ON users (email) WHERE deleted_at IS NULL;
+///
+/// Vì sao: `@unique` thường áp cho CẢ dòng đã xoá mềm. Nghĩa là xoá một tài
+/// khoản xong thì địa chỉ email đó vĩnh viễn không ai đăng ký lại được — kể cả
+/// chính chủ. Cách chữa phổ biến là bóp méo email lúc xoá
+/// (`a@b.com:deleted:1699…`), nhưng như vậy là làm hỏng dữ liệu thật chỉ để
+/// lách một ràng buộc.
+///
+/// HỆ QUẢ PHẢI NHỚ: Prisma không biết về index đó, nên
+/// `prisma.user.findUnique({ where: { email } })` KHÔNG biên dịch được. Dùng
+/// `findFirst` kèm `deletedAt: null`. Database vẫn từ chối trùng và vẫn ném
+/// P2002 như thường.
 model User {
   id       String  @id @default(cuid())
-  email    String? @unique
-  phone    String? @unique
-  username String? @unique
-  /// Hash Argon2id (hoặc bcrypt cũ, sẽ tự nâng cấp khi đăng nhập).
+  email    String?
+  phone    String?
+  username String?
+  /// Hash Argon2id. Bộ khung KHÔNG hỗ trợ thuật toán nào khác — một hash lạ
+  /// lọt vào đây chỉ dẫn tới "sai mật khẩu", không làm hỏng gì.
   /// `null` = tài khoản chưa đặt mật khẩu: admin tạo hộ, hoặc chỉ đăng nhập
   /// qua OAuth. Khác hẳn chuỗi rỗng — vốn là một mật khẩu "hợp lệ" nhìn từ
   /// tầng dữ liệu.
   password String?
 
   status          UserStatus @default(ACTIVE)
-  emailVerifiedAt DateTime?
-  phoneVerifiedAt DateTime?
+  emailVerifiedAt DateTime?  @db.Timestamptz(3)
+  phoneVerifiedAt DateTime?  @db.Timestamptz(3)
+
+  /// Địa chỉ email MỚI đang chờ xác thực.
+  ///
+  /// Đổi email là đường chiếm tài khoản kinh điển, nên nó không bao giờ được
+  /// ghi thẳng vào `email`: địa chỉ mới phải tự chứng minh quyền sở hữu trước
+  /// (VerificationToken loại EMAIL_CHANGE), và địa chỉ CŨ được gửi thư báo để
+  /// chủ thật còn kịp phản ứng.
+  pendingEmail String?
+
   /// Số lần sai mật khẩu LIÊN TIẾP. Reset về 0 khi đăng nhập thành công.
   failedLoginAttempts Int       @default(0)
   /// Khoá tạm do brute-force, tự hết hạn. Khác `status = BANNED` (khoá tay).
-  lockedUntil         DateTime?
+  lockedUntil         DateTime? @db.Timestamptz(3)
   /// Xoá mềm. Mọi truy vấn xác thực phải lọc `deletedAt: null`.
-  deletedAt           DateTime?
+  deletedAt           DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  // --- Xác thực hai lớp (TOTP) ---------------------------------------------
+
+  /// Khoá bí mật TOTP, **đã mã hoá AES-256-GCM** trước khi ghi.
+  ///
+  /// Không lưu dạng thô có chủ đích: khoá này sinh ra được mã hợp lệ, nên nếu
+  /// database bị rò thì 2FA mất tác dụng hoàn toàn. Khoá giải mã nằm ở biến
+  /// môi trường `ENCRYPTION_KEY` — tức là ngoài database.
+  twoFactorSecret String?
+
+  /// `null` = chưa bật 2FA. Có `twoFactorSecret` mà cột này null nghĩa là
+  /// người dùng đang ở giữa luồng cài đặt (đã quét QR, chưa nhập mã xác nhận).
+  twoFactorEnabledAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   profile UserProfile?
 
@@ -174,12 +255,16 @@ model User {
   refreshTokens      RefreshToken[]
   verificationTokens VerificationToken[]
   oauthAccounts      OAuthAccount[]
+  recoveryCodes      RecoveryCode[]
 
   devices       UserDevice[]
   notifications NotificationRecipient[]
 
-  auditLogs AuditLog[] @relation("UserAuditLogs")
-
+  // Index thường (không unique) cho việc TRA CỨU. Ràng buộc duy nhất do
+  // partial unique index trong migration đảm nhiệm — xem ghi chú đầu model.
+  @@index([email])
+  @@index([phone])
+  @@index([username])
   @@index([status])
   @@index([createdAt])
   @@index([deletedAt])
@@ -210,16 +295,45 @@ model UserProfile {
   /// Đừng lạm dụng: thứ gì cần lọc hoặc sắp xếp thì phải là cột thật.
   metadata  Json?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@map("user_profiles")
+}
+
+/// Mã khôi phục 2FA — dùng khi mất điện thoại.
+///
+/// Không có nó thì bật 2FA đồng nghĩa với "mất máy là mất tài khoản", và người
+/// dùng sẽ không bật. Mỗi mã dùng ĐÚNG MỘT LẦN.
+///
+/// `codeHash` băm kèm `userId` (xem `hashScopedToken`), nên hai người có thể
+/// bốc trúng cùng một mã mà không đụng nhau — mã khôi phục ngắn hơn token
+/// trong email nên khả năng trùng là có thật.
+model RecoveryCode {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  codeHash String
+  usedAt   DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([userId, codeHash])
+  @@index([userId])
+  @@map("recovery_codes")
 }
 
 // ============================================================
 // 3. OAUTH, TOKEN & PHIÊN ĐĂNG NHẬP
 // ============================================================
 
+/// ⚠️ Cố ý KHÔNG lưu access/refresh token của nhà cung cấp.
+///
+/// Chúng chỉ cần khi bạn gọi API của Google/Facebook THAY MẶT người dùng (đọc
+/// lịch, đăng bài). Dùng OAuth thuần để đăng nhập thì lưu chúng là ôm thêm một
+/// kho bí mật giá trị cao mà không đổi lại được gì. Cần thì thêm sau, và nhớ
+/// mã hoá như `User.twoFactorSecret`.
 model OAuthAccount {
   id                String   @id @default(cuid())
   userId            String
@@ -227,7 +341,7 @@ model OAuthAccount {
   /// google | github | facebook | apple
   provider          String
   providerAccountId String
-  createdAt         DateTime @default(now())
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([provider, providerAccountId])
   @@index([userId])
@@ -235,44 +349,88 @@ model OAuthAccount {
 }
 
 /// Refresh token cho client mobile/SPA. Chỉ lưu SHA-256 — rò database không
-/// đồng nghĩa với rò phiên đăng nhập. Xem TokenService để hiểu cơ chế xoay
-/// vòng và phát hiện dùng lại.
+/// đồng nghĩa với rò phiên đăng nhập.
 model RefreshToken {
-  id        String    @id @default(cuid())
-  tokenHash String    @unique
+  id        String @id @default(cuid())
+
+  /// ĐỊNH DANH PHIÊN, ổn định xuyên suốt mọi lần xoay vòng.
+  ///
+  /// Giải hai bài toán cùng lúc:
+  ///
+  /// 1. Client có một id KHÔNG đổi để nhận ra "thiết bị này" trong màn quản lý
+  ///    phiên. Nếu dùng `id` của từng token thì giá trị đó đổi sau mỗi lần
+  ///    refresh, và client phải cập nhật liên tục — một wart mà mọi hệ thống
+  ///    rotation đều gặp nếu thiếu cột này.
+  /// 2. Khi phát hiện token bị dùng lại, thu hồi đúng MỘT họ (một thiết bị bị
+  ///    đánh cắp) thay vì đá người dùng ra khỏi mọi thiết bị họ đang có.
+  familyId  String
+
+  tokenHash String @unique
   userId    String
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   deviceId  String?
   userAgent String?
   ip        String?
-  expiresAt DateTime
+
+  /// Người dùng đã vượt qua 2FA cho phiên này chưa. Phiên cấp từ luồng có 2FA
+  /// mang `true`; phiên cấp trước khi bật 2FA thì không.
+  twoFactorAt DateTime? @db.Timestamptz(3)
+
+  expiresAt DateTime  @db.Timestamptz(3)
   /// Đặt khi đăng xuất hoặc khi token bị xoay vòng.
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
+  revokedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
 
   device UserDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([familyId])
   @@index([expiresAt])
   @@map("refresh_tokens")
 }
 
 enum VerificationTokenType {
   EMAIL_VERIFICATION
+  /// Xác thực địa chỉ email MỚI trước khi thay thế địa chỉ cũ.
+  EMAIL_CHANGE
   PHONE_OTP
   PASSWORD_RESET
 }
 
-/// Token dùng MỘT LẦN gửi qua email/SMS. Cũng chỉ lưu SHA-256.
+/// Token dùng MỘT LẦN gửi qua email/SMS. Chỉ lưu bản băm.
+///
+/// ---
+/// HAI KIỂU BĂM, KHÔNG PHẢI MỘT
+///
+///   • Token trong LINK (email) là 256 bit ngẫu nhiên → băm trần. Người dùng
+///     chỉ gửi lại mỗi token, nên phải tra cứu được bằng chính nó.
+///   • OTP qua SMS chỉ có 6 chữ số → băm KÈM `userId`. Băm trần thì
+///     `SHA-256("123456")` là một hằng số: hai người cùng bốc trúng dãy đó sẽ
+///     đụng nhau, và tệ hơn — tra cứu bằng hash trần sẽ trả về bản ghi của
+///     NGƯỜI KHÁC, tức là đăng nhập nhầm tài khoản.
+///
+/// Xem `hashOpaqueToken` và `hashScopedToken`.
 model VerificationToken {
   id        String                @id @default(cuid())
   tokenHash String                @unique
   type      VerificationTokenType
   userId    String
   user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime              @default(now())
+
+  /// Nơi mã được gửi tới. Với `EMAIL_CHANGE` đây là địa chỉ MỚI — đó cũng là
+  /// nơi duy nhất lưu nó cho tới khi người dùng bấm xác nhận.
+  destination String?
+
+  /// Số lần nhập SAI.
+  ///
+  /// Bắt buộc với OTP: 6 chữ số chỉ có 10^6 khả năng, và rate limit theo IP
+  /// không cản được kẻ xoay vòng IP. Chạm ngưỡng thì token bị huỷ, buộc phải
+  /// xin mã mới.
+  attempts  Int @default(0)
+
+  expiresAt DateTime  @db.Timestamptz(3)
+  usedAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([userId, type])
   @@index([expiresAt])
@@ -289,26 +447,34 @@ enum DevicePlatform {
   WEB
 }
 
+/// ⚠️ `fcmToken` là UNIQUE TOÀN CỤC, không phải unique theo từng người dùng.
+///
+/// Một FCM token định danh MỘT LẦN CÀI APP TRÊN MỘT MÁY, không phải một cặp
+/// (người, máy). Ràng buộc theo `(userId, fcmToken)` cho phép hai dòng cùng
+/// token tồn tại song song khi hai tài khoản lần lượt đăng nhập trên cùng một
+/// điện thoại — và thông báo riêng tư của người thứ nhất sẽ hiện trên màn hình
+/// người thứ hai.
+///
+/// Đăng ký lại dưới tài khoản khác thì CHUYỂN CHỦ dòng đó (xem DeviceService),
+/// không tạo dòng mới.
 model UserDevice {
   id         String         @id @default(cuid())
   userId     String
   user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   platform   DevicePlatform
   /// Token nhận push (FCM/APNs).
-  fcmToken   String
+  fcmToken   String         @unique
   /// UUID phần cứng do client sinh, ổn định qua các lần cài lại app.
   deviceId   String?
   deviceName String?
   isActive   Boolean        @default(true)
-  lastSeenAt DateTime       @default(now())
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
+  lastSeenAt DateTime       @default(now()) @db.Timestamptz(3)
+  createdAt  DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime       @updatedAt @db.Timestamptz(3)
 
   refreshTokens RefreshToken[]
 
-  @@unique([userId, fcmToken])
   @@index([userId])
-  @@index([fcmToken])
   @@map("user_devices")
 }
 
@@ -331,8 +497,9 @@ model Notification {
   /// Điều hướng khi bấm: "/orders/123" hoặc URL tuyệt đối.
   actionUrl String?
   data      Json?
+  /// Chuỗi trần, không khoá ngoại — cùng lý do với `AuditLog.actorId`.
   senderId  String?
-  createdAt DateTime         @default(now())
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
 
   recipients NotificationRecipient[]
 
@@ -348,11 +515,11 @@ model NotificationRecipient {
   userId         String
 
   isRead   Boolean   @default(false)
-  readAt   DateTime?
+  readAt   DateTime? @db.Timestamptz(3)
   isPushed Boolean   @default(false)
-  pushedAt DateTime?
+  pushedAt DateTime? @db.Timestamptz(3)
 
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -373,12 +540,18 @@ model NotificationRecipient {
 /// đổi quyền, khoá tài khoản, xoá dữ liệu, đổi mật khẩu người khác. Ghi tất cả
 /// mọi thứ thì bảng phình nhanh tới mức không ai tra nổi, tức là mất luôn tác
 /// dụng.
+///
+/// ---
+/// ⚠️ KHÔNG CÓ KHOÁ NGOẠI TỚI `users`
+///
+/// Có chủ đích. Nhật ký phải sống lâu hơn đối tượng nó ghi lại: xoá cứng một
+/// tài khoản mà `onDelete: SetNull` xoá luôn `actorId` là mất danh tính của
+/// mọi hành động họ từng làm — đúng lúc cần tra nhất. `actorEmail` được chép
+/// lại tại thời điểm ghi, nên nhật ký vẫn đọc được sau khi người đó biến mất.
 model AuditLog {
   id         String   @id @default(cuid())
-  /// null = hệ thống tự làm (cron, webhook).
+  /// null = hệ thống tự làm (cron, webhook). Chuỗi trần, không khoá ngoại.
   actorId    String?
-  /// Chép lại email tại thời điểm đó: actor có thể bị xoá sau này, và nhật ký
-  /// mất danh tính là nhật ký vô dụng.
   actorEmail String?
   /// Quy ước: `<thực-thể>.<hành-động>` — "user.banned", "role.updated".
   action     String
@@ -387,9 +560,7 @@ model AuditLog {
   metadata   Json?
   ip         String?
   userAgent  String?
-  createdAt  DateTime @default(now())
-
-  actor User? @relation("UserAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([actorId, createdAt])

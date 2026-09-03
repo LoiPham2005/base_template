@@ -104,6 +104,26 @@ const coreEnvSchema = z.object({
    */
   API_PUBLIC_URL: optionalString(z.string().url("API_PUBLIC_URL phải là URL tuyệt đối").optional()),
 
+  /**
+   * Tên sản phẩm, hiển thị trong app xác thực (Google Authenticator…) và làm
+   * `issuer` của URI TOTP.
+   */
+  APP_NAME: z.string().default("Base Template"),
+
+  /**
+   * Khoá mã hoá bí mật lưu trong database (hiện dùng cho khoá TOTP).
+   *
+   * Sinh bằng: openssl rand -base64 32
+   *
+   * Bỏ trống thì 2FA không bật được (báo lỗi rõ ràng), phần còn lại của hệ
+   * thống chạy bình thường.
+   *
+   * ⚠️ ĐỔI GIÁ TRỊ NÀY SAU KHI ĐÃ CÓ DỮ LIỆU = làm hỏng mọi bí mật đã mã hoá.
+   * Người dùng phải cài lại 2FA từ đầu. Đặt một lần rồi giữ nguyên, và sao lưu
+   * cùng chỗ với các secret khác.
+   */
+  ENCRYPTION_KEY: optionalString(z.string().min(16).optional()),
+
   // --- Hạn của các loại token --------------------------------------------
 
   /**
@@ -123,6 +143,25 @@ const coreEnvSchema = z.object({
   PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().positive().max(1440).default(60),
   /** Hạn mã OTP gửi qua SMS. Rất ngắn — OTP chỉ có 6 chữ số. */
   PHONE_OTP_TTL_MINUTES: z.coerce.number().int().positive().max(60).default(5),
+
+  /**
+   * Số lần nhập SAI tối đa cho một mã dùng-một-lần (OTP, mã khôi phục 2FA),
+   * tính trên chính mã đó.
+   *
+   * Đây là chốt chặn ĐỘC LẬP với rate limit theo IP: rate limit chặn một IP dò
+   * nhiều tài khoản, còn ngưỡng này chặn việc dò một mã 6 chữ số bằng nhiều IP.
+   * Chạm ngưỡng thì mã bị huỷ, buộc phải xin mã mới.
+   */
+  VERIFICATION_MAX_ATTEMPTS: z.coerce.number().int().positive().max(20).default(5),
+
+  /**
+   * Hạn của "vé" 2FA — token trung gian cấp sau khi mật khẩu đúng nhưng chưa
+   * nhập mã xác thực.
+   *
+   * Ngắn có chủ đích: nó chứng minh "vừa nhập đúng mật khẩu", nên để lâu là
+   * kéo dài cửa sổ mà một máy bị chiếm có thể hoàn tất đăng nhập.
+   */
+  TWO_FACTOR_CHALLENGE_TTL_MINUTES: z.coerce.number().int().positive().max(30).default(5),
 
   // --- Chống brute-force theo TÀI KHOẢN ------------------------------------
   // Bổ sung cho rate-limit theo IP: rate-limit chặn một IP dò nhiều tài khoản,

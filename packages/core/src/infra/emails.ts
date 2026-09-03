@@ -22,6 +22,7 @@ import { enqueue } from "./queue";
 const WEB_ROUTES = {
   verifyEmail: "/verify-email",
   resetPassword: "/reset-password",
+  confirmEmailChange: "/confirm-email-change",
 } as const;
 
 export async function sendVerificationEmail(to: string, token: string): Promise<void> {
@@ -80,6 +81,62 @@ export async function sendPasswordChangedEmail(to: string): Promise<void> {
       "Mật khẩu tài khoản của bạn vừa được thay đổi, và mọi thiết bị đang đăng nhập đã bị đăng xuất.",
       "",
       "Nếu KHÔNG phải bạn thực hiện, hãy đặt lại mật khẩu ngay và liên hệ quản trị viên.",
+    ].join("\n"),
+  });
+}
+
+/**
+ * Xác thực địa chỉ email MỚI trong luồng đổi email.
+ *
+ * Gửi tới địa chỉ MỚI — nó phải tự chứng minh quyền sở hữu trước khi thay thế
+ * địa chỉ cũ.
+ */
+export async function sendEmailChangeVerificationEmail(to: string, token: string): Promise<void> {
+  const link = appUrl(`${WEB_ROUTES.confirmEmailChange}?token=${encodeURIComponent(token)}`);
+
+  await enqueue("email:send", {
+    to,
+    subject: "Xác nhận địa chỉ email mới",
+    text: [
+      "Chào bạn,",
+      "",
+      "Có yêu cầu chuyển tài khoản sang dùng địa chỉ email này. Nhấn vào liên kết dưới đây để xác nhận:",
+      link,
+      "",
+      `Liên kết có hiệu lực trong ${env.EMAIL_VERIFICATION_TTL_HOURS} giờ.`,
+      "",
+      "Nếu bạn không yêu cầu, hãy bỏ qua email này — sẽ không có gì thay đổi.",
+    ].join("\n"),
+  });
+}
+
+/**
+ * Báo cho địa chỉ CŨ biết có người đang xin đổi email.
+ *
+ * Đây là phần quan trọng nhất của luồng đổi email, không phải thư xã giao:
+ * nếu tài khoản đã bị chiếm, đây là tín hiệu DUY NHẤT mà chủ thật nhận được
+ * trước khi mất quyền khôi phục tài khoản. Vì vậy nó gửi NGAY ở bước xin đổi,
+ * không đợi tới lúc xác nhận.
+ */
+export async function sendEmailChangeNoticeEmail(to: string, newEmail: string): Promise<void> {
+  // Che phần giữa của địa chỉ mới: đủ để chủ thật nhận ra "đúng là tôi vừa
+  // làm" hay không, mà không tiết lộ nguyên địa chỉ của kẻ tấn công cho một
+  // hộp thư có thể đã bị đọc trộm.
+  const [local = "", domain = ""] = newEmail.split("@");
+  const masked = `${local.slice(0, 2)}${"*".repeat(Math.max(1, local.length - 2))}@${domain}`;
+
+  await enqueue("email:send", {
+    to,
+    subject: "Cảnh báo: có yêu cầu đổi địa chỉ email của tài khoản",
+    text: [
+      "Chào bạn,",
+      "",
+      `Có yêu cầu chuyển tài khoản này sang địa chỉ ${masked}.`,
+      "",
+      "Nếu ĐÚNG là bạn: không cần làm gì ở đây — hãy mở hộp thư mới và bấm liên kết xác nhận.",
+      "",
+      "Nếu KHÔNG phải bạn: tài khoản của bạn có thể đã bị chiếm. Hãy đổi mật khẩu NGAY",
+      "và đăng xuất toàn bộ thiết bị trong phần quản lý phiên đăng nhập.",
     ].join("\n"),
   });
 }

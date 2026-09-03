@@ -2,14 +2,17 @@ import { createZodDto } from "nestjs-zod";
 import {
   assignRolesSchema,
   changePasswordSchema,
+  confirmEmailChangeSchema,
   forgotPasswordSchema,
   loginSchema,
   refreshSchema,
   registerSchema,
+  requestEmailChangeSchema,
   resendVerificationSchema,
   resetPasswordSchema,
   updateProfileSchema,
   verifyEmailSchema,
+  verifyTwoFactorSchema,
 } from "@repo/contracts";
 
 /**
@@ -33,3 +36,6 @@ export class VerifyEmailDto extends createZodDto(verifyEmailSchema) {}
 export class ResendVerificationDto extends createZodDto(resendVerificationSchema) {}
 export class UpdateProfileDto extends createZodDto(updateProfileSchema) {}
 export class AssignRolesDto extends createZodDto(assignRolesSchema) {}
+export class VerifyTwoFactorDto extends createZodDto(verifyTwoFactorSchema) {}
+export class RequestEmailChangeDto extends createZodDto(requestEmailChangeSchema) {}
+export class ConfirmEmailChangeDto extends createZodDto(confirmEmailChangeSchema) {}

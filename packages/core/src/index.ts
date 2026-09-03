@@ -7,6 +7,8 @@ export * from "./common/logger";
 export * from "./common/observability";
 export * from "./common/crypto";
 export * from "./common/opaque-token";
+export * from "./common/encryption";
+export * from "./common/totp";
 export * from "./common/errors";
 
 // Hạ tầng
@@ -29,6 +31,7 @@ export * from "./rbac/role.service";
 export * from "./auth/token.service";
 export * from "./auth/verification.service";
 export * from "./auth/auth.service";
+export * from "./auth/two-factor.service";
 export * from "./auth/oauth.service";
 export * from "./auth/oauth/client";
 export * from "./auth/oauth/config";

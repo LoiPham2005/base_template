@@ -5,19 +5,30 @@ import type { RegisterDeviceInput } from "@repo/contracts";
  * Thiết bị nhận push của người dùng.
  *
  * ---
- * VÌ SAO `upsert` THEO `(userId, fcmToken)`
+ * VÌ SAO `upsert` THEO `fcmToken` — KHÔNG PHẢI `(userId, fcmToken)`
  *
- * FCM token đổi khi người dùng cài lại app, xoá dữ liệu, hoặc đơn giản là sau
- * một thời gian. Nếu chèn mới mỗi lần mở app thì một người dùng lâu năm tích
- * hàng trăm dòng, và mỗi lần gửi push là gửi tới hàng trăm token chết — Firebase
- * tính đó là tín hiệu xấu và hạ uy tín gửi của bạn.
+ * Một FCM token định danh MỘT LẦN CÀI APP TRÊN MỘT MÁY, không phải một cặp
+ * (người, máy). Ràng buộc theo `(userId, fcmToken)` nhìn có vẻ chặt hơn nhưng
+ * thực ra lỏng hơn, và nó đẻ ra một lỗi rất khó thấy:
+ *
+ *   1. Người A đăng nhập trên điện thoại P  → dòng (A, T)
+ *   2. A đăng xuất, người B đăng nhập trên P → dòng (B, T)
+ *   3. Cả hai dòng cùng tồn tại, cùng `isActive`
+ *   4. Thông báo riêng tư gửi cho A → đẩy tới token T → hiện trên màn hình B
+ *
+ * Unique toàn cục thì bước 2 CHUYỂN CHỦ dòng đó, và chỉ còn đúng một chủ sở
+ * hữu tại mỗi thời điểm — đúng với thực tế vật lý.
+ *
+ * Token cũng đổi khi người dùng cài lại app hoặc xoá dữ liệu; `upsert` giữ cho
+ * một người dùng lâu năm không tích hàng trăm dòng token chết — Firebase coi
+ * việc gửi tới token chết là tín hiệu xấu và hạ uy tín gửi của bạn.
  */
 export class DeviceService {
   constructor(private readonly db: PrismaClient) {}
 
   async register(userId: string, input: RegisterDeviceInput) {
     return this.db.userDevice.upsert({
-      where: { userId_fcmToken: { userId, fcmToken: input.fcmToken } },
+      where: { fcmToken: input.fcmToken },
       create: {
         userId,
         platform: input.platform,
@@ -26,6 +37,9 @@ export class DeviceService {
         deviceName: input.deviceName ?? null,
       },
       update: {
+        // `userId` NẰM TRONG phần update: đây chính là bước chuyển chủ khi một
+        // tài khoản khác đăng nhập trên cùng chiếc máy.
+        userId,
         platform: input.platform,
         deviceId: input.deviceId ?? null,
         deviceName: input.deviceName ?? null,
@@ -44,7 +58,12 @@ export class DeviceService {
     });
   }
 
-  /** Gọi khi đăng xuất: token còn đó nhưng không nên nhận push nữa. */
+  /**
+   * Gọi khi đăng xuất: token còn đó nhưng không nên nhận push nữa.
+   *
+   * `userId` vẫn nằm trong `where` dù `fcmToken` đã unique toàn cục — không có
+   * nó thì biết token của người khác là tắt được push của họ.
+   */
   async deactivate(userId: string, fcmToken: string): Promise<void> {
     await this.db.userDevice.updateMany({
       where: { userId, fcmToken },

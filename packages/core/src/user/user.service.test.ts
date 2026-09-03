@@ -3,6 +3,7 @@ import type { PrismaClient } from "@repo/db";
 import { UserService } from "./user.service";
 import {
   DuplicateFieldError,
+  InsufficientRoleLevelError,
   SelfActionForbiddenError,
   UnknownRoleKeyError,
 } from "../common/errors";
@@ -20,8 +21,13 @@ const USER_ROW = {
   userRoles: [{ role: { key: "USER" } }],
 };
 
+/**
+ * @param levels Bậc vai trò theo từng userId, cho các test leo thang đặc quyền.
+ * `userRole.findMany` trả về đúng bộ vai trò của người được hỏi.
+ */
 function createDb(
   overrides: { user?: Record<string, unknown>; role?: Record<string, unknown> } = {},
+  levels: Record<string, number> = {},
 ) {
   return {
     user: {
@@ -35,10 +41,17 @@ function createDb(
       ...overrides.user,
     },
     role: {
-      findMany: vi.fn().mockResolvedValue([{ id: "r-user", key: "USER" }]),
+      findMany: vi.fn().mockResolvedValue([{ id: "r-user", key: "USER", level: 0 }]),
       ...overrides.role,
     },
-    userRole: { deleteMany: vi.fn(), createMany: vi.fn() },
+    userRole: {
+      deleteMany: vi.fn(),
+      createMany: vi.fn(),
+      findMany: vi.fn(({ where }: { where: { userId: string } }) => {
+        const level = levels[where.userId];
+        return Promise.resolve(level === undefined ? [] : [{ role: { level } }]);
+      }),
+    },
     userProfile: { upsert: vi.fn() },
     $transaction: vi.fn(async (arg: unknown) =>
       typeof arg === "function" ? (arg as (tx: unknown) => unknown)(createTx()) : [],
@@ -50,6 +63,9 @@ function createTx() {
   return {
     user: { update: vi.fn().mockResolvedValue(USER_ROW) },
     userRole: { deleteMany: vi.fn(), createMany: vi.fn() },
+    // `setStatus` thu hồi phiên ngay trong cùng transaction khi khoá tài khoản
+    // — khoá mà để phiên cũ sống tiếp thì việc khoá gần như vô nghĩa.
+    refreshToken: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
   };
 }
 
@@ -153,6 +169,94 @@ describe("UserService", () => {
         totalPages: 3,
         hasNext: true,
       });
+    });
+  });
+
+  describe("chốt chặn leo thang đặc quyền", () => {
+    it("ADMIN không tạo được tài khoản SUPER_ADMIN", async () => {
+      /*
+       * Đây là đường leo thang rõ nhất, và chốt "không tự đổi vai trò của
+       * chính mình" KHÔNG cứu được: kẻ tấn công tạo một tài khoản KHÁC mang
+       * vai trò tối cao rồi đăng nhập vào đó.
+       */
+      const db = createDb(
+        {
+          role: {
+            findMany: vi.fn().mockResolvedValue([{ id: "r-sa", key: "SUPER_ADMIN", level: 100 }]),
+          },
+        },
+        { admin: 50 },
+      );
+
+      await expect(
+        new UserService(db).create({ ...baseInput, roleKeys: ["SUPER_ADMIN"], actorId: "admin" }),
+      ).rejects.toBeInstanceOf(InsufficientRoleLevelError);
+    });
+
+    it("ADMIN không gán được vai trò NGANG bậc mình", async () => {
+      // "Bằng" cũng bị chặn: cho phép ADMIN nhân bản ADMIN nghĩa là bậc đó
+      // tăng vô hạn và không ai gỡ được — vì ADMIN cũng không đụng được vào
+      // ADMIN khác.
+      const db = createDb(
+        {
+          role: { findMany: vi.fn().mockResolvedValue([{ id: "r-ad", key: "ADMIN", level: 50 }]) },
+        },
+        { admin: 50 },
+      );
+
+      await expect(
+        new UserService(db).create({ ...baseInput, roleKeys: ["ADMIN"], actorId: "admin" }),
+      ).rejects.toBeInstanceOf(InsufficientRoleLevelError);
+    });
+
+    it("ADMIN không sửa/khoá/xoá được tài khoản SUPER_ADMIN", async () => {
+      const db = createDb(
+        { user: { findFirst: vi.fn().mockResolvedValue({ id: "sa" }) } },
+        { admin: 50, sa: 100 },
+      );
+      const service = new UserService(db);
+
+      await expect(
+        service.update("sa", { status: "BANNED" }, { actorId: "admin" }),
+      ).rejects.toBeInstanceOf(InsufficientRoleLevelError);
+
+      await expect(service.setStatus("sa", "BANNED", { actorId: "admin" })).rejects.toBeInstanceOf(
+        InsufficientRoleLevelError,
+      );
+
+      await expect(service.softDelete("sa", { actorId: "admin" })).rejects.toBeInstanceOf(
+        InsufficientRoleLevelError,
+      );
+    });
+
+    it("ADMIN không cấp/tước được quyền lẻ cho SUPER_ADMIN", async () => {
+      // Cấp quyền lẻ là một dạng đổi thẩm quyền — nếu không chịu cùng chốt
+      // chặn thì nó trở thành đường vòng quanh luật vai trò.
+      const db = createDb({}, { admin: 50, sa: 100 });
+
+      await expect(
+        new UserService(db).setUserPermission("sa", "user:delete", false, { actorId: "admin" }),
+      ).rejects.toBeInstanceOf(InsufficientRoleLevelError);
+    });
+
+    it("SUPER_ADMIN thao tác được lên ADMIN", async () => {
+      const db = createDb(
+        { user: { findFirst: vi.fn().mockResolvedValue({ id: "admin" }) } },
+        { sa: 100, admin: 50 },
+      );
+
+      await expect(
+        new UserService(db).setStatus("admin", "BANNED", { actorId: "sa" }),
+      ).resolves.toBeDefined();
+    });
+
+    it("thao tác của HỆ THỐNG (không có actor) không bị chặn", async () => {
+      // Seed, script, job nền — không có ai để so bậc, và bỏ qua là đúng.
+      const db = createDb({}, {});
+
+      await expect(
+        new UserService(db).create({ ...baseInput, roleKeys: ["USER"] }),
+      ).resolves.toBeDefined();
     });
   });
 

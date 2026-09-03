@@ -11,10 +11,14 @@ import { logger } from "../common/logger";
 import {
   AccountBannedError,
   AccountLockedError,
+  DuplicateFieldError,
   InvalidCredentialsError,
   InvalidVerificationTokenError,
+  TwoFactorRequiredError,
 } from "../common/errors";
 import {
+  sendEmailChangeNoticeEmail,
+  sendEmailChangeVerificationEmail,
   sendPasswordChangedEmail,
   sendPasswordResetEmail,
   sendVerificationEmail,
@@ -97,6 +101,7 @@ export class AuthService {
         emailVerifiedAt: true,
         failedLoginAttempts: true,
         lockedUntil: true,
+        twoFactorEnabledAt: true,
         createdAt: true,
         updatedAt: true,
         profile: { select: { fullName: true, avatarUrl: true } },
@@ -136,6 +141,20 @@ export class AuthService {
 
     if (check.needsRehash) await this.upgradePasswordHash(user.id, input.password);
 
+    /*
+     * ĐÂY LÀ CỔNG 2FA.
+     *
+     * Đặt SAU mọi phép kiểm khác có chủ đích: chỉ người đã nhập đúng mật khẩu
+     * mới được biết tài khoản này có bật 2FA hay không. Kiểm sớm hơn là biến
+     * endpoint đăng nhập thành công cụ dò xem ai đã bật 2FA — thông tin rất
+     * hữu ích cho việc chọn mục tiêu.
+     *
+     * NÉM LỖI thay vì trả về một cờ: nơi gọi KHÔNG THỂ vô tình quên xử lý một
+     * exception, còn một trường `twoFactorRequired: true` trong object trả về
+     * thì quên rất dễ — và quên nghĩa là 2FA bị bỏ qua hoàn toàn.
+     */
+    if (user.twoFactorEnabledAt) throw new TwoFactorRequiredError(user.id);
+
     const {
       password: _password,
       failedLoginAttempts: _attempts,
@@ -143,6 +162,23 @@ export class AuthService {
       ...rest
     } = user;
     return toPublicUser(rest);
+  }
+
+  /**
+   * Lấy hồ sơ công khai SAU KHI đã vượt qua 2FA.
+   *
+   * Tách riêng vì `validateCredentials` cố tình ném lỗi với tài khoản có 2FA
+   * nên không trả về user được. Ở đây mật khẩu đã đúng và mã đã đúng — chỉ còn
+   * kiểm lại trạng thái tài khoản, phòng trường hợp nó bị khoá trong khoảng
+   * vài giây giữa hai bước.
+   */
+  async completeTwoFactorLogin(userId: string): Promise<PublicUser> {
+    const user = await this.users.findById(userId);
+    if (!user) throw new InvalidCredentialsError();
+
+    if (user.status === "BANNED") throw new AccountBannedError();
+
+    return user;
   }
 
   /**
@@ -175,10 +211,11 @@ export class AuthService {
   }
 
   /**
-   * Băm lại mật khẩu bằng thuật toán hiện hành và ghi đè.
+   * Băm lại mật khẩu bằng THAM SỐ hiện hành và ghi đè.
    *
-   * Đây là cách chuyển dần kho mật khẩu cũ (bcrypt) sang Argon2id mà không bắt
-   * ai đổi mật khẩu: mỗi lần đăng nhập thành công là một bản ghi được nâng cấp.
+   * Chạy khi bạn siết tham số Argon2 (ví dụ nâng `memoryCost` để theo kịp phần
+   * cứng mới): mỗi lần đăng nhập thành công là một bản ghi được nâng cấp, và
+   * không ai phải đổi mật khẩu.
    *
    * Lỗi ở đây bị nuốt CÓ CHỦ ĐÍCH. Người dùng vừa nhập đúng mật khẩu — chặn họ
    * đăng nhập chỉ vì thao tác nâng cấp nền phía sau thất bại là hành vi sai.
@@ -231,15 +268,15 @@ export class AuthService {
    * khi đã xác thực thì không được ghi đè mốc thời gian ban đầu.
    */
   async verifyEmail(token: string): Promise<PublicUser> {
-    const userId = await this.verification.consume(token, "EMAIL_VERIFICATION");
-    if (!userId) throw new InvalidVerificationTokenError();
+    const consumed = await this.verification.consume(token, "EMAIL_VERIFICATION");
+    if (!consumed) throw new InvalidVerificationTokenError();
 
     await this.db.user.updateMany({
-      where: { id: userId, emailVerifiedAt: null },
+      where: { id: consumed.userId, emailVerifiedAt: null },
       data: { emailVerifiedAt: new Date() },
     });
 
-    const user = await this.users.findById(userId);
+    const user = await this.users.findById(consumed.userId);
     if (!user) throw new InvalidVerificationTokenError();
 
     return user;
@@ -277,9 +314,10 @@ export class AuthService {
    * nghĩa.
    */
   async resetPassword(token: string, newPassword: string): Promise<string> {
-    const userId = await this.verification.consume(token, "PASSWORD_RESET");
-    if (!userId) throw new InvalidVerificationTokenError();
+    const consumed = await this.verification.consume(token, "PASSWORD_RESET");
+    if (!consumed) throw new InvalidVerificationTokenError();
 
+    const userId = consumed.userId;
     const password = await CryptoUtils.hashPassword(newPassword);
 
     const user = await this.db.user.update({
@@ -300,13 +338,108 @@ export class AuthService {
     return userId;
   }
 
+  // -------------------------------------------------------------------------
+  // Đổi địa chỉ email
+  // -------------------------------------------------------------------------
+
+  /**
+   * Bước 1: xin đổi sang một địa chỉ email mới.
+   *
+   * ---
+   * VÌ SAO KHÔNG GHI THẲNG VÀO `user.email`
+   *
+   * Đổi email là đường chiếm tài khoản kinh điển: chiếm được phiên đăng nhập
+   * một lúc, đổi email sang địa chỉ của mình, rồi dùng "quên mật khẩu" để
+   * chiếm vĩnh viễn. Chủ thật mất tài khoản mà không nhận được thông báo nào.
+   *
+   * Nên có ba chốt:
+   *   1. Bắt nhập lại MẬT KHẨU hiện tại.
+   *   2. Địa chỉ MỚI phải tự xác thực (link gửi tới đó) trước khi thay thế.
+   *   3. Địa chỉ CŨ được gửi thư báo NGAY — đó là tín hiệu duy nhất mà chủ
+   *      thật nhận được nếu tài khoản đã bị chiếm.
+   */
+  async requestEmailChange(userId: string, newEmail: string, password: string): Promise<void> {
+    const normalized = newEmail.trim().toLowerCase();
+
+    const user = await this.db.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { id: true, email: true, password: true },
+    });
+
+    if (!user?.password) {
+      await CryptoUtils.fakeCompare(password);
+      throw new InvalidCredentialsError();
+    }
+
+    const check = await CryptoUtils.verifyPassword(password, user.password);
+    if (!check.valid) throw new InvalidCredentialsError();
+
+    // Kiểm sớm để báo lỗi tử tế. Ràng buộc thật nằm ở partial unique index của
+    // database, áp lúc `confirmEmailChange` ghi vào — giữa hai thời điểm đó
+    // vẫn có khe cho người khác đăng ký trước.
+    const taken = await this.db.user.findFirst({
+      where: { email: normalized, deletedAt: null, NOT: { id: userId } },
+      select: { id: true },
+    });
+    if (taken) throw new DuplicateFieldError("email", normalized);
+
+    const { token } = await this.verification.issue(userId, "EMAIL_CHANGE", normalized);
+
+    await sendEmailChangeVerificationEmail(normalized, token);
+
+    if (user.email) {
+      // Gửi tới địa chỉ CŨ. Không chặn luồng nếu gửi hỏng — nhưng phải ghi log,
+      // vì đây là cảnh báo an ninh chứ không phải thư xã giao.
+      await sendEmailChangeNoticeEmail(user.email, normalized).catch((error: unknown) => {
+        logger.error("Không gửi được thư báo đổi email tới địa chỉ cũ", error, { userId });
+      });
+    }
+  }
+
+  /**
+   * Bước 2: xác nhận bằng link gửi tới địa chỉ MỚI.
+   *
+   * Thu hồi mọi phiên sau khi đổi: email là danh tính khôi phục tài khoản, nên
+   * đổi nó xong mà để phiên cũ còn sống thì kẻ đã chiếm phiên vẫn ở nguyên đó.
+   */
+  async confirmEmailChange(token: string): Promise<PublicUser> {
+    const consumed = await this.verification.consume(token, "EMAIL_CHANGE");
+    if (!consumed?.destination) throw new InvalidVerificationTokenError();
+
+    try {
+      await this.db.user.update({
+        where: { id: consumed.userId },
+        data: {
+          email: consumed.destination,
+          // Địa chỉ này vừa tự chứng minh quyền sở hữu bằng chính link vừa bấm.
+          emailVerifiedAt: new Date(),
+          pendingEmail: null,
+        },
+      });
+    } catch (error) {
+      // Ai đó đã đăng ký địa chỉ này trong lúc chờ — partial unique index chặn.
+      if ((error as { code?: string }).code === "P2002") {
+        throw new DuplicateFieldError("email", consumed.destination);
+      }
+      throw error;
+    }
+
+    await this.tokens.revokeAllForUser(consumed.userId);
+
+    const user = await this.users.findById(consumed.userId);
+    if (!user) throw new InvalidVerificationTokenError();
+
+    logger.info("Đã đổi địa chỉ email", { userId: consumed.userId });
+    return user;
+  }
+
   /**
    * Đổi mật khẩu khi đang đăng nhập.
    *
    * Bắt nhập lại mật khẩu hiện tại DÙ đã đăng nhập: nếu không, ai ngồi vào máy
    * đang mở sẵn phiên là chiếm được tài khoản vĩnh viễn.
    *
-   * @param keepSessionId Phiên được giữ lại — chính là phiên đang thực hiện
+   * @param keepFamilyId Phiên được giữ lại — chính là phiên đang thực hiện
    * thao tác này. Không có tham số này thì người dùng bị đăng xuất khỏi chính
    * thiết bị họ vừa thao tác, một trải nghiệm trông y như lỗi.
    */
@@ -314,7 +447,7 @@ export class AuthService {
     userId: string,
     currentPassword: string,
     newPassword: string,
-    keepSessionId?: string,
+    keepFamilyId?: string,
   ): Promise<void> {
     const user = await this.db.user.findFirst({
       where: { id: userId, deletedAt: null },
@@ -332,7 +465,7 @@ export class AuthService {
     const password = await CryptoUtils.hashPassword(newPassword);
 
     await this.db.user.update({ where: { id: userId }, data: { password } });
-    await this.tokens.revokeAllForUser(userId, { exceptId: keepSessionId });
+    await this.tokens.revokeAllForUser(userId, { exceptFamilyId: keepFamilyId });
 
     if (user.email) {
       await sendPasswordChangedEmail(user.email).catch((error: unknown) => {

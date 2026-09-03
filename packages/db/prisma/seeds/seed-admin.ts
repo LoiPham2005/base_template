@@ -31,7 +31,13 @@ export async function seedAdmin(prisma: PrismaClient): Promise<void> {
     select: { id: true },
   });
 
-  const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+  // `findFirst`, không phải `findUnique`: `email` được ràng buộc bằng partial
+  // unique index (`WHERE deleted_at IS NULL`) viết tay trong migration, nên
+  // Prisma không coi nó là khoá duy nhất. Xem ghi chú ở model `User`.
+  const existing = await prisma.user.findFirst({
+    where: { email, deletedAt: null },
+    select: { id: true },
+  });
 
   if (existing) {
     // Chỉ đảm bảo vai trò, KHÔNG đặt lại mật khẩu: chạy seed trên production

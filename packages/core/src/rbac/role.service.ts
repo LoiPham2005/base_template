@@ -6,6 +6,7 @@ import {
   type UpdateRoleInput,
 } from "@repo/contracts";
 import {
+  InsufficientRoleLevelError,
   RoleInUseError,
   RoleKeyAlreadyExistsError,
   RoleNotFoundError,
@@ -48,14 +49,52 @@ export class RoleService {
     return rows.map((row) => row.id);
   }
 
+  /**
+   * Bậc cao nhất trong số các vai trò của một người. Không có vai trò nào → -1.
+   *
+   * Lặp lại logic của `UserService.maxRoleLevel` — hai service không phụ thuộc
+   * nhau, và một truy vấn năm dòng thì rẻ hơn một mối phụ thuộc vòng.
+   */
+  private async maxRoleLevel(userId: string): Promise<number> {
+    const rows = await this.db.userRole.findMany({
+      where: { userId },
+      select: { role: { select: { level: true } } },
+    });
+
+    return rows.reduce((max, row) => Math.max(max, row.role.level), -1);
+  }
+
+  /**
+   * Chặn tạo/sửa/xoá một vai trò MẠNH HƠN HOẶC BẰNG bậc của chính mình.
+   *
+   * Không có chốt này thì `Role.level` chỉ là trang trí: một ADMIN bị chặn
+   * không gán được vai trò SUPER_ADMIN, nhưng lại tạo được một vai trò mới ở
+   * bậc 999 rồi tự gán — đi vòng qua đúng thứ vừa dựng lên để chặn.
+   */
+  private async assertCanManageLevel(
+    actorId: string | null | undefined,
+    level: number,
+  ): Promise<void> {
+    if (!actorId) return;
+
+    if (level >= (await this.maxRoleLevel(actorId))) {
+      throw new InsufficientRoleLevelError(
+        `Bạn không đủ thẩm quyền để quản lý vai trò ở bậc ${level}`,
+      );
+    }
+  }
+
   async list(): Promise<Role[]> {
     const rows = await this.db.role.findMany({
-      orderBy: [{ isSystem: "desc" }, { key: "asc" }],
+      // Sắp theo bậc GIẢM DẦN: màn phân quyền đọc từ mạnh xuống yếu, giống
+      // cách người ta hình dung sơ đồ tổ chức.
+      orderBy: [{ level: "desc" }, { key: "asc" }],
       select: {
         id: true,
         key: true,
         name: true,
         description: true,
+        level: true,
         isSystem: true,
         createdAt: true,
         updatedAt: true,
@@ -78,9 +117,11 @@ export class RoleService {
     return role;
   }
 
-  async create(input: CreateRoleInput): Promise<Role> {
+  async create(input: CreateRoleInput, options: { actorId?: string | null } = {}): Promise<Role> {
     const existing = await this.db.role.findUnique({ where: { key: input.key } });
     if (existing) throw new RoleKeyAlreadyExistsError(input.key);
+
+    await this.assertCanManageLevel(options.actorId, input.level);
 
     const permissionIds = await this.resolvePermissionIds(input.permissions);
 
@@ -89,6 +130,7 @@ export class RoleService {
         key: input.key,
         name: input.name,
         description: input.description ?? null,
+        level: input.level,
         // `isSystem` KHÔNG đọc từ input: vai trò hệ thống là thứ chỉ `db:seed`
         // được tạo. Cho phép đặt qua API là mở đường tạo một vai trò không xoá
         // được, và không có nút nào gỡ nó ra.
@@ -101,12 +143,21 @@ export class RoleService {
     return this.findByKey(input.key);
   }
 
-  async update(key: string, input: UpdateRoleInput): Promise<Role> {
+  async update(
+    key: string,
+    input: UpdateRoleInput,
+    options: { actorId?: string | null } = {},
+  ): Promise<Role> {
     const role = await this.db.role.findUnique({
       where: { key },
-      select: { id: true, isSystem: true },
+      select: { id: true, isSystem: true, level: true },
     });
     if (!role) throw new RoleNotFoundError(key);
+
+    // Bậc HIỆN TẠI: không cho sửa một vai trò mạnh hơn mình…
+    await this.assertCanManageLevel(options.actorId, role.level);
+    // …và bậc MỚI: không cho nâng nó lên ngang/vượt mình.
+    if (input.level !== undefined) await this.assertCanManageLevel(options.actorId, input.level);
 
     const permissionIds = input.permissions
       ? await this.resolvePermissionIds(input.permissions)
@@ -118,6 +169,7 @@ export class RoleService {
         data: {
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.description !== undefined ? { description: input.description } : {}),
+          ...(input.level !== undefined ? { level: input.level } : {}),
         },
       });
 
@@ -136,14 +188,16 @@ export class RoleService {
     return this.findByKey(key);
   }
 
-  async remove(key: string): Promise<void> {
+  async remove(key: string, options: { actorId?: string | null } = {}): Promise<void> {
     const role = await this.db.role.findUnique({
       where: { key },
-      select: { id: true, isSystem: true, _count: { select: { userRoles: true } } },
+      select: { id: true, isSystem: true, level: true, _count: { select: { userRoles: true } } },
     });
     if (!role) throw new RoleNotFoundError(key);
 
     if (role.isSystem) throw new SystemRoleImmutableError(key);
+
+    await this.assertCanManageLevel(options.actorId, role.level);
 
     // Chặn thay vì cascade: xoá vai trò đang được dùng sẽ âm thầm tước quyền
     // của tất cả những người mang nó, và không có gì hoàn tác được.

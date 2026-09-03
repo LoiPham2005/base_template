@@ -46,6 +46,25 @@ async list(@Query() query: ListOrdersDto): Promise<Paginated<Order>> {
 - Đổi vai trò hoặc quyền của ai đó → gọi `permissions.invalidateUser(id)`.
   Quên là thay đổi chỉ có hiệu lực sau 60 giây, và người dùng tưởng hệ thống hỏng.
 
+## Bẫy riêng của repo này
+
+- **`prisma.user.findUnique({ where: { email } })` KHÔNG biên dịch được.**
+  `email`/`phone`/`username` ràng buộc bằng **partial unique index** viết tay
+  (`WHERE deleted_at IS NULL`), Prisma không biết. Dùng
+  `findFirst({ where: { email, deletedAt: null } })`.
+- **Băm mã dùng-một-lần: chọn đúng hàm.** Token trong link (256 bit) → `hashOpaqueToken`.
+  OTP / mã khôi phục (entropy thấp) → `hashScopedToken(userId, code)`. Dùng nhầm
+  hàm cho OTP là mở đường đăng nhập nhầm tài khoản — `SHA-256("123456")` là một
+  hằng số.
+- **Mọi JWT phải mang `typ`.** `JwtAuthGuard` chỉ nhận `typ: "access"`. Thêm một
+  loại token mới mà quên gắn `typ` thì nó bị từ chối (an toàn); gắn `"access"`
+  cho một token không phải access là mở cửa hậu.
+- **Thao tác lên người dùng phải truyền `actorId`.** Đó là thứ kích hoạt chốt
+  chặn bậc quyền lực (`Role.level`). Bỏ trống = coi như hệ thống tự làm và
+  KHÔNG kiểm — chỉ đúng cho seed/cron.
+- **`Role.level` đồng bộ từ code**, không sửa qua giao diện cho vai trò hệ
+  thống. Nó là ràng buộc bảo mật, không phải nhãn hiển thị.
+
 ## Những thứ TUYỆT ĐỐI không làm
 
 - **Đừng ký quyền vào JWT.** Token mang `roles` chỉ để hiển thị.
@@ -56,7 +75,12 @@ async list(@Query() query: ListOrdersDto): Promise<Paginated<Order>> {
 - **Đừng phân biệt lý do thất bại ở endpoint công khai.** "Email không tồn tại"
   và "sai mật khẩu" phải giống hệt nhau, kể cả về thời gian phản hồi.
 - **Đừng thêm thư viện validate thứ hai.** Zod là chuẩn duy nhất ở repo này.
-- **Đừng `select` cột `password`.** Xem `USER_SELECT` trong `user.service.ts`.
+- **Đừng `select` cột `password`** hay `twoFactorSecret`. Xem `USER_SELECT`
+  trong `user.service.ts`.
+- **Đừng lưu bí mật cần đọc lại dưới dạng thô.** Dùng `encryptSecret` /
+  `decryptSecret`. Mật khẩu thì ngược lại — luôn BĂM, không bao giờ mã hoá.
+- **Đừng thêm "thiết bị tin cậy" cho 2FA** mà không cân nhắc kỹ: đó là một cơ
+  chế bỏ qua 2FA, và bộ khung cố ý không bật sẵn một đường vòng như vậy.
 
 ## Chạy kiểm tra
 

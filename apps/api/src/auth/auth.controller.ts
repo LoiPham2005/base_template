@@ -17,13 +17,17 @@ import {
   type ActiveSession,
   type AuthResponse,
   type PublicUser,
+  type TwoFactorChallenge,
 } from "@repo/contracts";
 import {
   AuditService,
   AuthService,
   InvalidRefreshTokenError,
+  InvalidTwoFactorCodeError,
   PermissionService,
   TokenService,
+  TwoFactorRequiredError,
+  TwoFactorService,
   UserService,
 } from "@repo/core";
 import { Public } from "../common/decorators/public.decorator";
@@ -33,14 +37,17 @@ import { clientIp, userAgent } from "../common/request";
 import { SessionService } from "./session.service";
 import {
   ChangePasswordDto,
+  ConfirmEmailChangeDto,
   ForgotPasswordDto,
   LoginDto,
   RefreshDto,
   RegisterDto,
+  RequestEmailChangeDto,
   ResendVerificationDto,
   ResetPasswordDto,
   UpdateProfileDto,
   VerifyEmailDto,
+  VerifyTwoFactorDto,
 } from "./auth.dto";
 
 @ApiTags("auth")
@@ -52,6 +59,7 @@ export class AuthController {
     private readonly tokens: TokenService,
     private readonly sessions: SessionService,
     private readonly permissions: PermissionService,
+    private readonly twoFactor: TwoFactorService,
     private readonly audit: AuditService,
   ) {}
 
@@ -73,13 +81,44 @@ export class AuthController {
     return { user, tokens };
   }
 
+  /**
+   * Đăng nhập.
+   *
+   * Trả về MỘT TRONG HAI hình dạng:
+   *
+   *   • `{ user, tokens }`                        — xong, đăng nhập thành công.
+   *   • `{ twoFactorRequired: true, challengeToken, expiresIn }` — tài khoản có
+   *     bật 2FA; gửi tiếp `challengeToken` + mã tới `POST /auth/2fa/verify`.
+   *
+   * Hai hình dạng KHÁC HẲN nhau có chủ đích: client buộc phải rẽ nhánh tường
+   * minh, thay vì đọc phải một object thiếu `tokens` rồi hỏng ở đâu đó xa hơn.
+   */
   @Public()
   @RateLimit("login")
   @Post("login")
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Đăng nhập bằng email/tên đăng nhập + mật khẩu" })
-  async login(@Body() dto: LoginDto, @Req() request: FastifyRequest): Promise<AuthResponse> {
-    const user = await this.auth.validateCredentials(dto);
+  @ApiOperation({ summary: "Đăng nhập — trả về token, hoặc vé 2FA nếu tài khoản đã bật" })
+  async login(
+    @Body() dto: LoginDto,
+    @Req() request: FastifyRequest,
+  ): Promise<AuthResponse | TwoFactorChallenge> {
+    let user: PublicUser;
+
+    try {
+      user = await this.auth.validateCredentials(dto);
+    } catch (error) {
+      /*
+       * KHÔNG phải lỗi — đây là một bước trong luồng đăng nhập.
+       *
+       * `validateCredentials` ném thay vì trả cờ để nơi gọi không thể vô tình
+       * bỏ qua bước thứ hai; bắt lại ở đây là chỗ duy nhất biết phải làm gì
+       * tiếp theo. Mật khẩu ĐÃ đúng tại thời điểm này.
+       */
+      if (error instanceof TwoFactorRequiredError) {
+        return this.sessions.issueTwoFactorChallenge(error.userId);
+      }
+      throw error;
+    }
 
     const tokens = await this.sessions.issue(user, {
       userAgent: userAgent(request),
@@ -92,6 +131,65 @@ export class AuthController {
       entityId: user.id,
       actorId: user.id,
       actorEmail: user.email,
+      ip: clientIp(request),
+      userAgent: userAgent(request),
+    });
+
+    return { user, tokens };
+  }
+
+  /**
+   * Bước hai của đăng nhập khi tài khoản có bật 2FA.
+   *
+   * Công khai CÓ CHỦ ĐÍCH: người dùng chưa có access token, họ mới có vé. Vé
+   * mang `typ: "2fa"` nên `JwtAuthGuard` từ chối dùng nó ở bất cứ đâu khác.
+   *
+   * Chấp nhận cả mã TOTP lẫn mã khôi phục — người dùng ở màn hình này chỉ có
+   * một ô nhập và không nên phải tự phân loại thứ mình đang dán vào.
+   */
+  @Public()
+  @RateLimit("twoFactor")
+  @Post("2fa/verify")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Xác minh mã 2FA để hoàn tất đăng nhập" })
+  async verifyTwoFactor(
+    @Body() dto: VerifyTwoFactorDto,
+    @Req() request: FastifyRequest,
+  ): Promise<AuthResponse> {
+    const userId = await this.sessions.verifyTwoFactorChallenge(dto.challengeToken);
+
+    if (!(await this.twoFactor.verifyCode(userId, dto.code))) {
+      await this.audit.record({
+        action: AUDIT_ACTIONS.TWO_FACTOR_FAILED,
+        entity: "User",
+        entityId: userId,
+        actorId: userId,
+        ip: clientIp(request),
+        userAgent: userAgent(request),
+      });
+
+      throw new InvalidTwoFactorCodeError();
+    }
+
+    // Kiểm lại trạng thái tài khoản: nó có thể vừa bị khoá trong vài giây giữa
+    // bước nhập mật khẩu và bước nhập mã.
+    const user = await this.auth.completeTwoFactorLogin(userId);
+
+    const twoFactorAt = new Date();
+
+    const tokens = await this.sessions.issue(user, {
+      userAgent: userAgent(request),
+      ip: clientIp(request),
+      twoFactorAt,
+    });
+
+    await this.audit.record({
+      action: AUDIT_ACTIONS.LOGIN_SUCCEEDED,
+      entity: "User",
+      entityId: user.id,
+      actorId: user.id,
+      actorEmail: user.email,
+      metadata: { twoFactor: true },
       ip: clientIp(request),
       userAgent: userAgent(request),
     });
@@ -179,8 +277,9 @@ export class AuthController {
     @Body() dto: ChangePasswordDto,
     @Req() request: FastifyRequest,
   ): Promise<void> {
-    // `sid` là phiên đang gọi request này — giữ nó lại, nếu không người dùng bị
-    // đăng xuất khỏi chính thiết bị họ vừa thao tác, trông y như lỗi.
+    // `sid` là `familyId` của phiên đang gọi request này — giữ nó lại, nếu
+    // không người dùng bị đăng xuất khỏi chính thiết bị họ vừa thao tác, trông
+    // y như lỗi.
     await this.auth.changePassword(user.sub, dto.currentPassword, dto.newPassword, user.sid);
 
     await this.audit.record({
@@ -252,6 +351,69 @@ export class AuthController {
   }
 
   // -------------------------------------------------------------------------
+  // Đổi địa chỉ email
+  // -------------------------------------------------------------------------
+
+  /**
+   * Bước 1 — xin đổi sang địa chỉ mới.
+   *
+   * Gửi link xác nhận tới địa chỉ MỚI, và thư cảnh báo tới địa chỉ CŨ. Thư thứ
+   * hai mới là phần quan trọng: nếu tài khoản đã bị chiếm, đó là tín hiệu duy
+   * nhất mà chủ thật nhận được.
+   */
+  @RateLimit("emailVerificationRequest")
+  @Post("change-email")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Xin đổi địa chỉ email (cần mật khẩu hiện tại)" })
+  async requestEmailChange(
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: RequestEmailChangeDto,
+    @Req() request: FastifyRequest,
+  ): Promise<void> {
+    await this.auth.requestEmailChange(user.sub, dto.newEmail, dto.password);
+
+    await this.audit.record({
+      action: AUDIT_ACTIONS.EMAIL_CHANGE_REQUESTED,
+      entity: "User",
+      entityId: user.sub,
+      actorId: user.sub,
+      actorEmail: user.email,
+      ip: clientIp(request),
+      userAgent: userAgent(request),
+    });
+  }
+
+  /**
+   * Bước 2 — xác nhận bằng link gửi tới địa chỉ mới.
+   *
+   * Công khai vì người dùng có thể bấm link từ một trình duyệt chưa đăng nhập.
+   * Bản thân token đã chứng minh quyền sở hữu hộp thư mới.
+   */
+  @Public()
+  @Post("change-email/confirm")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Xác nhận đổi email (thu hồi mọi phiên đăng nhập)" })
+  async confirmEmailChange(
+    @Body() dto: ConfirmEmailChangeDto,
+    @Req() request: FastifyRequest,
+  ): Promise<PublicUser> {
+    const user = await this.auth.confirmEmailChange(dto.token);
+
+    await this.audit.record({
+      action: AUDIT_ACTIONS.EMAIL_CHANGED,
+      entity: "User",
+      entityId: user.id,
+      actorId: user.id,
+      actorEmail: user.email,
+      ip: clientIp(request),
+      userAgent: userAgent(request),
+    });
+
+    return user;
+  }
+
+  // -------------------------------------------------------------------------
   // Quản lý phiên đăng nhập
   // -------------------------------------------------------------------------
 
@@ -297,7 +459,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: "Đăng xuất TẤT CẢ thiết bị khác (giữ thiết bị hiện tại)" })
   async revokeOtherSessions(@CurrentUser() user: CurrentUserPayload) {
-    const count = await this.tokens.revokeAllForUser(user.sub, { exceptId: user.sid });
+    const count = await this.tokens.revokeAllForUser(user.sub, { exceptFamilyId: user.sid });
     return { revoked: count };
   }
 }

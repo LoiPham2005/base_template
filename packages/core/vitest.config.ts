@@ -26,6 +26,9 @@ export default defineConfig({
       NODE_ENV: "test",
       DATABASE_URL: "postgresql://test:test@localhost:5432/test",
       APP_URL: "http://localhost:3000",
+      // Khoá GIẢ, chỉ để các test mã hoá/2FA chạy được. Không bao giờ được
+      // dùng lại ở bất kỳ môi trường thật nào.
+      ENCRYPTION_KEY: "khoa-gia-chi-dung-trong-test-khong-dung-that",
       // Bỏ trống REDIS_URL có chủ đích: cache và rate limit dùng bản RAM, nên
       // test chạy được mà không cần dựng Redis.
     },

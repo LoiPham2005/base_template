@@ -5,6 +5,7 @@ import { RoleService } from "./rbac/role.service";
 import { TokenService } from "./auth/token.service";
 import { VerificationService } from "./auth/verification.service";
 import { AuthService } from "./auth/auth.service";
+import { TwoFactorService } from "./auth/two-factor.service";
 import { OAuthService } from "./auth/oauth.service";
 import { AuditService } from "./audit/audit.service";
 import { NotificationService } from "./notification/notification.service";
@@ -48,6 +49,7 @@ export const core = {
   token: tokens,
   verification,
   auth: new AuthService(prisma, users, verification, tokens),
+  twoFactor: new TwoFactorService(prisma),
   oauth: new OAuthService(prisma, users),
   audit: new AuditService(prisma),
   notification: new NotificationService(prisma),

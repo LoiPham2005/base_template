@@ -96,6 +96,14 @@ export type RoleSeed = {
   key: SystemRoleKey;
   name: string;
   description: string;
+  /**
+   * Bậc quyền lực. Cao hơn = mạnh hơn.
+   *
+   * Chừa khoảng trống giữa các bậc (0 → 10 → 20 → 50 → 100) để sau này chèn
+   * vai trò mới vào giữa mà không phải đánh số lại toàn bộ — đánh số lại là
+   * thao tác mà một lần sai sẽ trao quyền cho nhầm người.
+   */
+  level: number;
   /** `"*"` = mọi quyền, kể cả quyền được thêm vào code sau này. */
   permissions: readonly Permission[] | "*";
 };
@@ -103,6 +111,7 @@ export type RoleSeed = {
 export const DEFAULT_ROLE_PERMISSIONS: readonly RoleSeed[] = [
   {
     key: SYSTEM_ROLES.SUPER_ADMIN,
+    level: 100,
     name: "Quản trị tối cao",
     description: "Toàn quyền mọi chức năng. Luôn được cấp cả quyền thêm mới sau này.",
     // Liệt kê tay thì mỗi lần thêm quyền mới lại phải nhớ bổ sung vào đây — và
@@ -111,6 +120,7 @@ export const DEFAULT_ROLE_PERMISSIONS: readonly RoleSeed[] = [
   },
   {
     key: SYSTEM_ROLES.ADMIN,
+    level: 50,
     name: "Quản trị viên",
     description: "Quản lý người dùng, phân quyền, thông báo và xem nhật ký",
     permissions: [
@@ -130,6 +140,7 @@ export const DEFAULT_ROLE_PERMISSIONS: readonly RoleSeed[] = [
   },
   {
     key: SYSTEM_ROLES.MANAGER,
+    level: 20,
     name: "Quản lý",
     description: "Xem người dùng, gửi thông báo nội bộ, xem nhật ký",
     permissions: [
@@ -145,6 +156,7 @@ export const DEFAULT_ROLE_PERMISSIONS: readonly RoleSeed[] = [
   },
   {
     key: SYSTEM_ROLES.STAFF,
+    level: 10,
     name: "Nhân viên",
     description: "Xem thông tin người dùng để hỗ trợ, nhận thông báo",
     permissions: [
@@ -157,6 +169,7 @@ export const DEFAULT_ROLE_PERMISSIONS: readonly RoleSeed[] = [
   },
   {
     key: SYSTEM_ROLES.USER,
+    level: 0,
     name: "Người dùng",
     description: "Chỉ thao tác trên dữ liệu của chính mình",
     permissions: ["profile:read:own", "profile:update:own", "notification:read"],

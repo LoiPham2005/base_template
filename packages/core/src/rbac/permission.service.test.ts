@@ -113,6 +113,28 @@ describe("PermissionService", () => {
     expect(db.user.findFirst).toHaveBeenCalledTimes(2);
   });
 
+  it("lọc ngoại lệ ĐÃ HẾT HẠN ngay trong truy vấn", async () => {
+    /*
+     * Lọc ở tầng database chứ không ở tầng ứng dụng: mọi nơi hỏi "người này có
+     * quyền gì" đều đi qua đúng câu truy vấn này, nên không có đường nào quên.
+     *
+     * Một quyền tạm còn hiệu lực sau khi hết hạn là đúng thứ mà cột `expiresAt`
+     * sinh ra để ngăn — và nó hỏng trong im lặng, không ai phát hiện cho tới
+     * lúc kiểm toán.
+     */
+    const db = createDb({ userRoles: [], userPermissions: [] });
+
+    await new PermissionService(db).permissionsFor("u1");
+
+    const args = vi.mocked(db.user.findFirst).mock.calls[0]![0]! as {
+      select: { userPermissions: { where: unknown } };
+    };
+
+    expect(args.select.userPermissions.where).toEqual({
+      OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
+    });
+  });
+
   it("canActOnResource: quyền ':own' chỉ áp dụng cho dữ liệu của chính mình", async () => {
     const db = createDb({
       userRoles: [roleWith("profile:update:own")],

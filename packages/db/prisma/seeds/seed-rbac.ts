@@ -41,11 +41,17 @@ export async function seedRbac(prisma: PrismaClient): Promise<void> {
       where: { key: seed.key },
       // KHÔNG đụng vào `name`/`description` nếu vai trò đã tồn tại: khách hàng
       // có thể đã đổi tên hiển thị cho hợp ngữ cảnh của họ.
-      update: { isSystem: true },
+      //
+      // `level` thì NGƯỢC LẠI — luôn đồng bộ từ code. Nó không phải nhãn hiển
+      // thị mà là ràng buộc bảo mật: bậc của SUPER_ADMIN bị ai đó hạ xuống 5
+      // nghĩa là mọi ADMIN đều thao tác được lên tài khoản quản trị tối cao.
+      // Thứ như vậy phải có đúng một nguồn sự thật, và nó nằm trong code.
+      update: { isSystem: true, level: seed.level },
       create: {
         key: seed.key,
         name: seed.name,
         description: seed.description,
+        level: seed.level,
         isSystem: true,
       },
       select: { id: true },

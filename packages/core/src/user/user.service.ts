@@ -14,6 +14,7 @@ import {
 import { CryptoUtils } from "../common/crypto";
 import {
   DuplicateFieldError,
+  InsufficientRoleLevelError,
   SelfActionForbiddenError,
   UnknownPermissionError,
   UnknownRoleKeyError,
@@ -34,6 +35,7 @@ const USER_SELECT = {
   username: true,
   status: true,
   emailVerifiedAt: true,
+  twoFactorEnabledAt: true,
   createdAt: true,
   updatedAt: true,
   profile: { select: { fullName: true, avatarUrl: true } },
@@ -50,17 +52,99 @@ type UserRow = Prisma.UserGetPayload<{ select: typeof USER_SELECT }>;
  * `user.userRoles.some(r => r.role.key === "ADMIN")`.
  */
 export function toPublicUser(row: UserRow): PublicUser {
-  const { profile, userRoles, ...rest } = row;
+  const { profile, userRoles, twoFactorEnabledAt, ...rest } = row;
   return {
     ...rest,
     fullName: profile?.fullName ?? null,
     avatarUrl: profile?.avatarUrl ?? null,
     roles: userRoles.map((item) => item.role.key),
+    // Trả cờ boolean chứ không trả mốc thời gian: client chỉ cần biết có bật
+    // hay không, còn "bật từ khi nào" là thông tin của riêng chủ tài khoản
+    // (xem `GET /auth/2fa`), không nên lộ ra ở mọi danh sách người dùng.
+    twoFactorEnabled: twoFactorEnabledAt !== null,
   };
 }
 
 export class UserService {
   constructor(private readonly db: PrismaClient) {}
+
+  // -------------------------------------------------------------------------
+  // Bậc quyền lực — chốt chặn leo thang đặc quyền
+  // -------------------------------------------------------------------------
+
+  /**
+   * Bậc cao nhất trong số các vai trò của một người. Không có vai trò nào → -1.
+   *
+   * Dùng -1 chứ không phải 0 vì 0 là bậc HỢP LỆ của vai trò USER: nếu tài khoản
+   * không vai trò cũng được coi là bậc 0 thì nó ngang hàng USER, và luật "phải
+   * cao hơn hẳn" sẽ chặn cả những thao tác đáng lẽ hợp lệ.
+   */
+  private async maxRoleLevel(userId: string): Promise<number> {
+    const rows = await this.db.userRole.findMany({
+      where: { userId },
+      select: { role: { select: { level: true } } },
+    });
+
+    return rows.reduce((max, row) => Math.max(max, row.role.level), -1);
+  }
+
+  /**
+   * Chặn thao tác lên người NGANG HÀNG hoặc MẠNH HƠN mình.
+   *
+   * ---
+   * VÌ SAO CHỐT NÀY LÀ BẮT BUỘC
+   *
+   * Không có nó thì phân quyền theo quyền hạn (`user:update`, `user:create`)
+   * trở thành phẳng: ai sửa được người dùng thì sửa được TẤT CẢ người dùng, kể
+   * cả quản trị tối cao. Và tệ hơn — họ tạo được một tài khoản mang vai trò
+   * SUPER_ADMIN rồi đăng nhập vào đó. Chốt "không tự đổi vai trò của chính
+   * mình" không cứu được, vì họ tạo tài khoản KHÁC.
+   *
+   * `actorId` là `null` khi thao tác đến từ hệ thống (seed, script, job nền) —
+   * lúc đó không có ai để so bậc, và bỏ qua là đúng.
+   */
+  private async assertCanActOn(actorId: string | null | undefined, targetUserId: string) {
+    if (!actorId) return;
+
+    const [actorLevel, targetLevel] = await Promise.all([
+      this.maxRoleLevel(actorId),
+      this.maxRoleLevel(targetUserId),
+    ]);
+
+    if (targetLevel >= actorLevel) {
+      throw new InsufficientRoleLevelError(
+        "Bạn không thể thao tác lên tài khoản có thẩm quyền ngang hoặc cao hơn mình",
+      );
+    }
+  }
+
+  /**
+   * Chặn gán vai trò MẠNH HƠN HOẶC BẰNG bậc của chính mình.
+   *
+   * "Bằng" cũng bị chặn: cho phép một ADMIN tạo thêm ADMIN nghe hợp lý, nhưng
+   * nó có nghĩa là bậc ADMIN tự nhân bản vô hạn và không ai gỡ được — vì theo
+   * `assertCanActOn`, ADMIN không đụng được vào ADMIN khác. Muốn thêm người
+   * cùng bậc thì phải do bậc CAO HƠN thực hiện.
+   */
+  private async assertCanAssignRoles(actorId: string | null | undefined, roleKeys: string[]) {
+    if (!actorId || roleKeys.length === 0) return;
+
+    const [actorLevel, roles] = await Promise.all([
+      this.maxRoleLevel(actorId),
+      this.db.role.findMany({
+        where: { key: { in: roleKeys } },
+        select: { key: true, level: true },
+      }),
+    ]);
+
+    const tooHigh = roles.filter((role) => role.level >= actorLevel);
+
+    if (tooHigh.length > 0) {
+      throw new InsufficientRoleLevelError(
+        `Bạn không đủ thẩm quyền để gán vai trò: ${tooHigh.map((role) => role.key).join(", ")}`,
+      );
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Đọc
@@ -203,9 +287,13 @@ export class UserService {
   async create(input: CreateUserInput & { actorId?: string | null }): Promise<PublicUser> {
     await this.assertUnique(input);
 
-    const roleIds = await this.resolveRoleIds(
-      input.roleKeys?.length ? input.roleKeys : [SYSTEM_ROLES.USER],
-    );
+    const roleKeys = input.roleKeys?.length ? input.roleKeys : [SYSTEM_ROLES.USER];
+
+    // TRƯỚC khi tạo. Đây là đường leo thang đặc quyền rõ nhất: tạo một tài
+    // khoản SUPER_ADMIN rồi tự đăng nhập vào đó.
+    await this.assertCanAssignRoles(input.actorId, roleKeys);
+
+    const roleIds = await this.resolveRoleIds(roleKeys);
 
     const password = input.password ? await CryptoUtils.hashPassword(input.password) : null;
 
@@ -250,6 +338,9 @@ export class UserService {
     if (input.roleKeys && options.actorId && options.actorId === id) {
       throw new SelfActionForbiddenError("đổi vai trò của");
     }
+
+    await this.assertCanActOn(options.actorId, id);
+    if (input.roleKeys) await this.assertCanAssignRoles(options.actorId, input.roleKeys);
 
     await this.assertUnique(input, id);
 
@@ -342,10 +433,14 @@ export class UserService {
     });
     if (!row) throw new UserNotFoundError(userId);
 
-    const { profile, userRoles, ...rest } = row;
+    const { profile, userRoles, twoFactorEnabledAt, ...rest } = row;
     return {
       ...rest,
       roles: userRoles.map((item) => item.role.key),
+      // Cùng hình dạng với `toPublicUser`: trả cờ boolean, KHÔNG trả mốc thời
+      // gian. "Bật từ khi nào" là thông tin của riêng chủ tài khoản và chỉ có
+      // ở `GET /auth/2fa`.
+      twoFactorEnabled: twoFactorEnabledAt !== null,
       profile: profile ?? null,
       fullName: profile?.fullName ?? null,
       avatarUrl: profile?.avatarUrl ?? null,
@@ -360,6 +455,8 @@ export class UserService {
     if (options.actorId && options.actorId === id) {
       throw new SelfActionForbiddenError("đổi trạng thái");
     }
+
+    await this.assertCanActOn(options.actorId, id);
 
     const existing = await this.db.user.findFirst({
       where: { id, deletedAt: null },
@@ -411,6 +508,8 @@ export class UserService {
       throw new SelfActionForbiddenError("xoá");
     }
 
+    await this.assertCanActOn(options.actorId, id);
+
     const user = await this.db.user.findFirst({
       where: { id, deletedAt: null },
       select: { id: true, email: true, username: true, phone: true },
@@ -445,9 +544,13 @@ export class UserService {
     userId: string,
     permissionKey: string,
     isGranted: boolean,
-    options: { actorId?: string | null } = {},
+    options: { actorId?: string | null; expiresAt?: Date | null } = {},
   ): Promise<void> {
     if (!isKnownPermission(permissionKey)) throw new UnknownPermissionError([permissionKey]);
+
+    // Cấp/tước quyền lẻ là một dạng đổi thẩm quyền — phải chịu cùng chốt chặn
+    // với việc đổi vai trò, nếu không thì nó trở thành đường vòng.
+    await this.assertCanActOn(options.actorId, userId);
 
     const permission = await this.db.permission.findUnique({
       where: { key: permissionKey },
@@ -463,8 +566,13 @@ export class UserService {
         permissionId: permission.id,
         isGranted,
         grantedBy: options.actorId ?? null,
+        expiresAt: options.expiresAt ?? null,
       },
-      update: { isGranted, grantedBy: options.actorId ?? null },
+      update: {
+        isGranted,
+        grantedBy: options.actorId ?? null,
+        expiresAt: options.expiresAt ?? null,
+      },
     });
   }
 

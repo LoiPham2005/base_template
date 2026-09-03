@@ -39,6 +39,11 @@ import { cacheDelByPrefix, cacheGet, cacheSet } from "../infra/cache";
 /**
  * Một phút: đủ ngắn để thay đổi phân quyền lan ra nhanh, đủ dài để chặn gần
  * như toàn bộ truy vấn lặp lại trên đường đi nóng.
+ *
+ * Cũng là ĐỘ TRỄ TỐI ĐA của việc hết hạn quyền tạm (`UserPermission.expiresAt`):
+ * một quyền hết hạn lúc 10:00 có thể còn dùng được tới 10:01. Chấp nhận được
+ * với "cấp quyền trong 24 giờ"; nếu dự án của bạn cần chính xác tới giây thì
+ * hạ TTL xuống — cái giá là nhiều truy vấn hơn.
  */
 const CACHE_TTL_SECONDS = 60;
 
@@ -76,6 +81,13 @@ export class PermissionService {
           },
         },
         userPermissions: {
+          // Bỏ qua ngoại lệ ĐÃ HẾT HẠN ngay trong truy vấn.
+          //
+          // Lọc ở tầng ứng dụng cũng được, nhưng lọc ở đây thì không có đường
+          // nào quên: mọi nơi hỏi "người này có quyền gì" đều đi qua đúng câu
+          // truy vấn này. Một quyền tạm mà vẫn còn hiệu lực sau khi hết hạn là
+          // đúng thứ mà cột `expiresAt` sinh ra để ngăn.
+          where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
           select: { isGranted: true, permission: { select: { key: true } } },
         },
       },

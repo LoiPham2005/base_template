@@ -8,7 +8,7 @@ CREATE TYPE "UserStatus" AS ENUM ('ACTIVE', 'INACTIVE', 'BANNED');
 CREATE TYPE "Gender" AS ENUM ('MALE', 'FEMALE', 'OTHER');
 
 -- CreateEnum
-CREATE TYPE "VerificationTokenType" AS ENUM ('EMAIL_VERIFICATION', 'PHONE_OTP', 'PASSWORD_RESET');
+CREATE TYPE "VerificationTokenType" AS ENUM ('EMAIL_VERIFICATION', 'EMAIL_CHANGE', 'PHONE_OTP', 'PASSWORD_RESET');
 
 -- CreateEnum
 CREATE TYPE "DevicePlatform" AS ENUM ('IOS', 'ANDROID', 'WEB');
@@ -22,9 +22,10 @@ CREATE TABLE "roles" (
     "key" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "description" TEXT,
+    "level" INTEGER NOT NULL DEFAULT 0,
     "isSystem" BOOLEAN NOT NULL DEFAULT false,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ(3) NOT NULL,
 
     CONSTRAINT "roles_pkey" PRIMARY KEY ("id")
 );
@@ -36,7 +37,7 @@ CREATE TABLE "permissions" (
     "name" TEXT NOT NULL,
     "category" TEXT NOT NULL,
     "description" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "permissions_pkey" PRIMARY KEY ("id")
 );
@@ -45,7 +46,7 @@ CREATE TABLE "permissions" (
 CREATE TABLE "role_permissions" (
     "roleId" TEXT NOT NULL,
     "permissionId" TEXT NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "role_permissions_pkey" PRIMARY KEY ("roleId","permissionId")
 );
@@ -55,7 +56,7 @@ CREATE TABLE "user_roles" (
     "userId" TEXT NOT NULL,
     "roleId" TEXT NOT NULL,
     "assignedBy" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "user_roles_pkey" PRIMARY KEY ("userId","roleId")
 );
@@ -66,7 +67,8 @@ CREATE TABLE "user_permissions" (
     "permissionId" TEXT NOT NULL,
     "isGranted" BOOLEAN NOT NULL DEFAULT true,
     "grantedBy" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expiresAt" TIMESTAMPTZ(3),
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "user_permissions_pkey" PRIMARY KEY ("userId","permissionId")
 );
@@ -79,13 +81,16 @@ CREATE TABLE "users" (
     "username" TEXT,
     "password" TEXT,
     "status" "UserStatus" NOT NULL DEFAULT 'ACTIVE',
-    "emailVerifiedAt" TIMESTAMP(3),
-    "phoneVerifiedAt" TIMESTAMP(3),
+    "emailVerifiedAt" TIMESTAMPTZ(3),
+    "phoneVerifiedAt" TIMESTAMPTZ(3),
+    "pendingEmail" TEXT,
     "failedLoginAttempts" INTEGER NOT NULL DEFAULT 0,
-    "lockedUntil" TIMESTAMP(3),
-    "deletedAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "lockedUntil" TIMESTAMPTZ(3),
+    "deletedAt" TIMESTAMPTZ(3),
+    "twoFactorSecret" TEXT,
+    "twoFactorEnabledAt" TIMESTAMPTZ(3),
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ(3) NOT NULL,
 
     CONSTRAINT "users_pkey" PRIMARY KEY ("id")
 );
@@ -104,10 +109,21 @@ CREATE TABLE "user_profiles" (
     "district" TEXT,
     "country" TEXT DEFAULT 'VN',
     "metadata" JSONB,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ(3) NOT NULL,
 
     CONSTRAINT "user_profiles_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "recovery_codes" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "codeHash" TEXT NOT NULL,
+    "usedAt" TIMESTAMPTZ(3),
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "recovery_codes_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -116,7 +132,7 @@ CREATE TABLE "oauth_accounts" (
     "userId" TEXT NOT NULL,
     "provider" TEXT NOT NULL,
     "providerAccountId" TEXT NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "oauth_accounts_pkey" PRIMARY KEY ("id")
 );
@@ -124,14 +140,16 @@ CREATE TABLE "oauth_accounts" (
 -- CreateTable
 CREATE TABLE "refresh_tokens" (
     "id" TEXT NOT NULL,
+    "familyId" TEXT NOT NULL,
     "tokenHash" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "deviceId" TEXT,
     "userAgent" TEXT,
     "ip" TEXT,
-    "expiresAt" TIMESTAMP(3) NOT NULL,
-    "revokedAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "twoFactorAt" TIMESTAMPTZ(3),
+    "expiresAt" TIMESTAMPTZ(3) NOT NULL,
+    "revokedAt" TIMESTAMPTZ(3),
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "refresh_tokens_pkey" PRIMARY KEY ("id")
 );
@@ -142,9 +160,11 @@ CREATE TABLE "verification_tokens" (
     "tokenHash" TEXT NOT NULL,
     "type" "VerificationTokenType" NOT NULL,
     "userId" TEXT NOT NULL,
-    "expiresAt" TIMESTAMP(3) NOT NULL,
-    "usedAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "destination" TEXT,
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "expiresAt" TIMESTAMPTZ(3) NOT NULL,
+    "usedAt" TIMESTAMPTZ(3),
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "verification_tokens_pkey" PRIMARY KEY ("id")
 );
@@ -158,9 +178,9 @@ CREATE TABLE "user_devices" (
     "deviceId" TEXT,
     "deviceName" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "lastSeenAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "lastSeenAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ(3) NOT NULL,
 
     CONSTRAINT "user_devices_pkey" PRIMARY KEY ("id")
 );
@@ -175,7 +195,7 @@ CREATE TABLE "notifications" (
     "actionUrl" TEXT,
     "data" JSONB,
     "senderId" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "notifications_pkey" PRIMARY KEY ("id")
 );
@@ -186,10 +206,10 @@ CREATE TABLE "notification_recipients" (
     "notificationId" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "isRead" BOOLEAN NOT NULL DEFAULT false,
-    "readAt" TIMESTAMP(3),
+    "readAt" TIMESTAMPTZ(3),
     "isPushed" BOOLEAN NOT NULL DEFAULT false,
-    "pushedAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "pushedAt" TIMESTAMPTZ(3),
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "notification_recipients_pkey" PRIMARY KEY ("id")
 );
@@ -205,13 +225,16 @@ CREATE TABLE "audit_logs" (
     "metadata" JSONB,
     "ip" TEXT,
     "userAgent" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "audit_logs_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
 CREATE UNIQUE INDEX "roles_key_key" ON "roles"("key");
+
+-- CreateIndex
+CREATE INDEX "roles_level_idx" ON "roles"("level");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "permissions_key_key" ON "permissions"("key");
@@ -229,13 +252,16 @@ CREATE INDEX "user_roles_roleId_idx" ON "user_roles"("roleId");
 CREATE INDEX "user_permissions_permissionId_idx" ON "user_permissions"("permissionId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
+CREATE INDEX "user_permissions_expiresAt_idx" ON "user_permissions"("expiresAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "users_phone_key" ON "users"("phone");
+CREATE INDEX "users_email_idx" ON "users"("email");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "users_username_key" ON "users"("username");
+CREATE INDEX "users_phone_idx" ON "users"("phone");
+
+-- CreateIndex
+CREATE INDEX "users_username_idx" ON "users"("username");
 
 -- CreateIndex
 CREATE INDEX "users_status_idx" ON "users"("status");
@@ -250,6 +276,12 @@ CREATE INDEX "users_deletedAt_idx" ON "users"("deletedAt");
 CREATE UNIQUE INDEX "user_profiles_userId_key" ON "user_profiles"("userId");
 
 -- CreateIndex
+CREATE INDEX "recovery_codes_userId_idx" ON "recovery_codes"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "recovery_codes_userId_codeHash_key" ON "recovery_codes"("userId", "codeHash");
+
+-- CreateIndex
 CREATE INDEX "oauth_accounts_userId_idx" ON "oauth_accounts"("userId");
 
 -- CreateIndex
@@ -260,6 +292,9 @@ CREATE UNIQUE INDEX "refresh_tokens_tokenHash_key" ON "refresh_tokens"("tokenHas
 
 -- CreateIndex
 CREATE INDEX "refresh_tokens_userId_idx" ON "refresh_tokens"("userId");
+
+-- CreateIndex
+CREATE INDEX "refresh_tokens_familyId_idx" ON "refresh_tokens"("familyId");
 
 -- CreateIndex
 CREATE INDEX "refresh_tokens_expiresAt_idx" ON "refresh_tokens"("expiresAt");
@@ -274,13 +309,10 @@ CREATE INDEX "verification_tokens_userId_type_idx" ON "verification_tokens"("use
 CREATE INDEX "verification_tokens_expiresAt_idx" ON "verification_tokens"("expiresAt");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "user_devices_fcmToken_key" ON "user_devices"("fcmToken");
+
+-- CreateIndex
 CREATE INDEX "user_devices_userId_idx" ON "user_devices"("userId");
-
--- CreateIndex
-CREATE INDEX "user_devices_fcmToken_idx" ON "user_devices"("fcmToken");
-
--- CreateIndex
-CREATE UNIQUE INDEX "user_devices_userId_fcmToken_key" ON "user_devices"("userId", "fcmToken");
 
 -- CreateIndex
 CREATE INDEX "notifications_type_createdAt_idx" ON "notifications"("type", "createdAt");
@@ -328,6 +360,9 @@ ALTER TABLE "user_permissions" ADD CONSTRAINT "user_permissions_permissionId_fke
 ALTER TABLE "user_profiles" ADD CONSTRAINT "user_profiles_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "recovery_codes" ADD CONSTRAINT "recovery_codes_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "oauth_accounts" ADD CONSTRAINT "oauth_accounts_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -348,6 +383,31 @@ ALTER TABLE "notification_recipients" ADD CONSTRAINT "notification_recipients_no
 -- AddForeignKey
 ALTER TABLE "notification_recipients" ADD CONSTRAINT "notification_recipients_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- AddForeignKey
-ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_actorId_fkey" FOREIGN KEY ("actorId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
+-- ============================================================
+-- PARTIAL UNIQUE INDEX — phần Prisma không diễn đạt được
+-- ============================================================
+--
+-- `email`, `phone`, `username` phải là DUY NHẤT, nhưng CHỈ trong số các tài
+-- khoản còn sống.
+--
+-- Dùng `@unique` của Prisma thì ràng buộc áp cho cả dòng đã xoá mềm: xoá một
+-- tài khoản là địa chỉ email đó vĩnh viễn không ai đăng ký lại được, kể cả
+-- chính chủ. Cách chữa phổ biến là bóp méo email lúc xoá
+-- (`a@b.com:deleted:1699…`) — làm hỏng dữ liệu thật chỉ để lách một ràng buộc,
+-- và làm nhật ký kiểm toán khó đọc.
+--
+-- Postgres hỗ trợ index có điều kiện, Prisma thì chưa sinh ra được, nên ba câu
+-- này viết tay. Database vẫn từ chối trùng và vẫn ném P2002 như thường.
+--
+-- ⚠️ HỆ QUẢ: Prisma không biết về chúng, nên `findUnique({ where: { email } })`
+-- KHÔNG biên dịch được. Dùng `findFirst({ where: { email, deletedAt: null } })`.
+
+CREATE UNIQUE INDEX "users_email_active_key"
+  ON "users" ("email") WHERE "deletedAt" IS NULL;
+
+CREATE UNIQUE INDEX "users_phone_active_key"
+  ON "users" ("phone") WHERE "deletedAt" IS NULL;
+
+CREATE UNIQUE INDEX "users_username_active_key"
+  ON "users" ("username") WHERE "deletedAt" IS NULL;

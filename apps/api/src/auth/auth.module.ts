@@ -6,12 +6,14 @@ import {
   OAuthService,
   PermissionService,
   TokenService,
+  TwoFactorService,
   UserService,
   core,
 } from "@repo/core";
 import { env } from "../env";
 import { AuthController } from "./auth.controller";
 import { OAuthController } from "./oauth.controller";
+import { TwoFactorController } from "./two-factor.controller";
 import { SessionService } from "./session.service";
 
 /**
@@ -37,7 +39,7 @@ import { SessionService } from "./session.service";
       // Đặt mặc định ở đây chỉ tạo ảo giác rằng chúng giống nhau.
     }),
   ],
-  controllers: [AuthController, OAuthController],
+  controllers: [AuthController, TwoFactorController, OAuthController],
   providers: [
     SessionService,
     { provide: AuthService, useValue: core.auth },
@@ -45,6 +47,7 @@ import { SessionService } from "./session.service";
     { provide: TokenService, useValue: core.token },
     { provide: PermissionService, useValue: core.permission },
     { provide: OAuthService, useValue: core.oauth },
+    { provide: TwoFactorService, useValue: core.twoFactor },
     { provide: AuditService, useValue: core.audit },
   ],
   exports: [
@@ -55,6 +58,7 @@ import { SessionService } from "./session.service";
     TokenService,
     PermissionService,
     OAuthService,
+    TwoFactorService,
     AuditService,
   ],
 })

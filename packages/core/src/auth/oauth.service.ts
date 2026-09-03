@@ -91,6 +91,7 @@ export class OAuthService {
         username: true,
         status: true,
         emailVerifiedAt: true,
+        twoFactorEnabledAt: true,
         createdAt: true,
         updatedAt: true,
         profile: { select: { fullName: true, avatarUrl: true } },

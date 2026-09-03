@@ -51,6 +51,15 @@ export const RATE_LIMITS = {
    */
   passwordChange: { limit: 10, windowSeconds: 900 },
 
+  /**
+   * Mọi endpoint nhập mã 2FA (xác minh lúc đăng nhập, bật, tắt, cấp lại mã).
+   *
+   * Siết chặt vì mã TOTP chỉ có 10^6 khả năng và mã khôi phục thì ít hơn nhiều
+   * so với một token 256 bit. `VERIFICATION_MAX_ATTEMPTS` chặn theo từng mã;
+   * ngưỡng này chặn theo IP — hai lớp cho hai kiểu tấn công khác nhau.
+   */
+  twoFactor: { limit: 10, windowSeconds: 300 },
+
   /** Xin link upload — chặn việc bơm rác vào kho lưu trữ. */
   upload: { limit: 60, windowSeconds: 300 },
 } as const satisfies Record<string, RateLimitOptions>;

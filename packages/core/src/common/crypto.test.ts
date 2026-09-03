@@ -27,16 +27,34 @@ describe("CryptoUtils", () => {
     expect(a).not.toBe(b);
   });
 
-  it("nhận diện hash bcrypt cũ và yêu cầu băm lại", async () => {
-    // Hash bcrypt thật của chuỗi "password", sinh sẵn để test không phụ thuộc
-    // vào việc còn cài được thư viện băm bcrypt hay không.
+  it("hash thuật toán khác (bcrypt cũ) thất bại AN TOÀN, không crash", async () => {
+    // Bộ khung chỉ dùng Argon2id. Một hash bcrypt lọt vào database do nhập dữ
+    // liệu từ hệ thống cũ phải dẫn tới "sai mật khẩu", không phải lỗi 500 —
+    // xem ghi chú đầu `crypto.ts` để biết cách hỗ trợ nếu thật sự cần.
     const bcryptHash = "$2b$10$mfOSMFAGI5rmd4CXWS5m5OG/.CdQ6RzFezGMk0HTrnqnYZDRwKyz.";
 
-    const check = await CryptoUtils.verifyPassword("password", bcryptHash);
+    await expect(CryptoUtils.verifyPassword("password", bcryptHash)).resolves.toEqual({
+      valid: false,
+      needsRehash: false,
+    });
+  });
 
-    expect(check.valid).toBe(true);
-    // Đây là cơ chế chuyển dần sang Argon2id mà không bắt ai đổi mật khẩu.
-    expect(check.needsRehash).toBe(true);
+  it("đánh dấu cần băm lại khi tham số Argon2 đã lỗi thời", async () => {
+    // Hash Argon2id hợp lệ nhưng sinh bằng memoryCost thấp hơn cấu hình hiện
+    // tại. Đây là cách toàn bộ kho mật khẩu tự nâng cấp sau mỗi lần đăng nhập
+    // khi bạn siết tham số để theo kịp phần cứng mới.
+    const { hash } = await import("@node-rs/argon2");
+    const weak = await hash("matkhau-cu", {
+      algorithm: 2,
+      memoryCost: 8192,
+      timeCost: 2,
+      parallelism: 1,
+    });
+
+    await expect(CryptoUtils.verifyPassword("matkhau-cu", weak)).resolves.toEqual({
+      valid: true,
+      needsRehash: true,
+    });
   });
 
   it("hash rác trả về 'sai mật khẩu' thay vì ném lỗi", async () => {

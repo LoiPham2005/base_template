@@ -12,10 +12,24 @@ export const roleKeySchema = z
   // khác nhau nhìn từ database.
   .regex(/^[A-Z][A-Z0-9_]*$/, "Mã vai trò chỉ gồm CHỮ HOA, số và dấu gạch dưới");
 
+/**
+ * Bậc quyền lực. Cao hơn = mạnh hơn.
+ *
+ * Thang của seed: USER 0 · STAFF 10 · MANAGER 20 · ADMIN 50 · SUPER_ADMIN 100.
+ * Chừa khoảng trống giữa các bậc để sau này chèn vai trò mới vào giữa mà không
+ * phải đánh số lại toàn bộ.
+ *
+ * Trần 100 là có chủ đích: 100 dành riêng cho SUPER_ADMIN, và không ai tạo
+ * được vai trò ngang nó qua API (`RoleService` còn chặn thêm: không tạo được
+ * vai trò ở bậc ngang hoặc trên chính mình).
+ */
+export const roleLevelSchema = z.coerce.number().int().min(0).max(100);
+
 export const createRoleSchema = z.object({
   key: roleKeySchema,
   name: z.string().trim().min(1, "Tên vai trò không được để trống").max(100),
   description: emptyToUndefined(z.string().max(255).optional()),
+  level: roleLevelSchema.default(0),
   permissions: z.array(z.string()).default([]),
 });
 export type CreateRoleInput = z.infer<typeof createRoleSchema>;
@@ -23,6 +37,7 @@ export type CreateRoleInput = z.infer<typeof createRoleSchema>;
 export const updateRoleSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   description: emptyToUndefined(z.string().max(255).optional()),
+  level: roleLevelSchema.optional(),
   /**
    * Danh sách quyền THAY THẾ toàn bộ, không phải thêm vào.
    *
@@ -39,6 +54,7 @@ export const roleSchema = z.object({
   key: z.string(),
   name: z.string(),
   description: z.string().nullable(),
+  level: z.number(),
   isSystem: z.boolean(),
   permissions: z.array(z.string()),
   /** Số người đang mang vai trò này — cảnh báo trước khi xoá. */

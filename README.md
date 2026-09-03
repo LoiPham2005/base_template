@@ -29,15 +29,21 @@ packages/
 - Quản lý "thiết bị đang đăng nhập": xem, đăng xuất từng thiết bị hoặc tất cả
 - Xác thực email, quên/đặt lại/đổi mật khẩu (kèm email thông báo đã đổi)
 - Khoá tạm khi sai mật khẩu liên tiếp + rate limit theo IP trên Redis
-- Argon2id, tự nâng cấp hash bcrypt cũ ở lần đăng nhập kế tiếp
+- Argon2id (một thuật toán duy nhất), tự băm lại khi bạn siết tham số
+- **2FA (TOTP)**: Google Authenticator/Authy/1Password, mã khôi phục, bí mật
+  mã hoá AES-256-GCM trong database
+- **Đổi email an toàn**: xác thực địa chỉ mới + cảnh báo địa chỉ cũ
 - OAuth Google / GitHub / Facebook / Apple (PKCE, state ký JWT)
 
 **Phân quyền (RBAC)**
 
 - Một người **nhiều vai trò**; vai trò tạo/sửa được lúc chạy từ giao diện
+- **Bậc quyền lực** (`Role.level`) — ADMIN không đụng được vào SUPER_ADMIN, và
+  không tạo được tài khoản mạnh hơn mình
 - Quyền chi tiết `<tài-nguyên>:<hành-động>`, danh mục nằm trong code (TypeScript
   bắt lỗi gõ sai), việc gán nằm trong database
-- Ngoại lệ theo từng cá nhân: **cấp thêm** hoặc **tước bỏ** — tước luôn thắng
+- Ngoại lệ theo từng cá nhân: **cấp thêm** hoặc **tước bỏ** (tước luôn thắng),
+  có thể đặt **hạn tự hết**
 - Kiểm quyền luôn tra lại từ database (có cache), **không** đọc từ token
 
 **Hạ tầng**
@@ -233,10 +239,13 @@ Trước khi deploy production, kiểm đủ 5 điều:
 
 1. `JWT_SECRET` là chuỗi ngẫu nhiên **riêng của môi trường đó** (khác dev).
 2. `CORS_ORIGIN` là domain cụ thể, không phải `*`.
-3. `APP_URL` trỏ đúng domain thật — sai là link trong email vô dụng.
+3. `APP_URL` trỏ đúng domain thật — sai là link trong email vô dụng. Đặt thêm
+   `API_PUBLIC_URL` nếu API ở tên miền riêng (nếu không, callback OAuth hỏng).
 4. `SMTP_HOST` đã cấu hình. Thiếu thì app **báo lỗi** thay vì nuốt email.
 5. `REDIS_URL` đã có nếu chạy từ 2 instance trở lên — không thì rate limit bị
    nhân lên theo số instance.
+6. `ENCRYPTION_KEY` đã đặt nếu bạn dùng 2FA — và **không bao giờ đổi** sau khi
+   đã có người bật, vì đổi là mọi người phải cài lại 2FA từ đầu.
 
 Kiểm tra sau khi deploy: `GET /api/v1/health/ready` phải trả `status: "ok"`.
 Thành phần nào chưa cấu hình sẽ hiện `disabled` (bình thường), hỏng thì hiện

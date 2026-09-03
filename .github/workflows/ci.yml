@@ -56,6 +56,8 @@ jobs:
       JWT_SECRET: ci-jwt-secret-must-be-at-least-32-characters-long
       CORS_ORIGIN: "*"
       APP_URL: http://localhost:3000
+      # Khoá GIẢ cho CI — chỉ để các test mã hoá/2FA chạy được.
+      ENCRYPTION_KEY: ci-encryption-key-not-used-anywhere-real
       # Job chạy thẳng trong tiến trình: CI không dựng worker, và một job bị
       # đẩy vào Redis rồi không ai xử lý sẽ làm bước seed treo.
       QUEUE_ENABLED: "0"

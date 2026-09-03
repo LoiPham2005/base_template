@@ -1,16 +1,15 @@
 import { hash as argon2Hash, verify as argon2Verify } from "@node-rs/argon2";
-import { compare as bcryptCompare } from "bcryptjs";
 
 /**
- * Băm và kiểm tra mật khẩu.
+ * Băm và kiểm tra mật khẩu. MỘT thuật toán duy nhất: Argon2id.
  *
  * ---
- * VÌ SAO ARGON2ID CHỨ KHÔNG PHẢI BCRYPT
+ * VÌ SAO ARGON2ID
  *
- * Argon2id là lựa chọn số một của OWASP hiện nay. Khác biệt cốt lõi: bcrypt chỉ
- * tốn CPU, còn Argon2id tốn CPU *và* bộ nhớ. Kẻ tấn công dựng dàn GPU/ASIC để
- * dò offline bị chặn bởi băng thông bộ nhớ chứ không phải số nhân — thứ đắt và
- * khó mở rộng hơn nhiều.
+ * Lựa chọn số một của OWASP hiện nay. Khác biệt cốt lõi so với bcrypt: bcrypt
+ * chỉ tốn CPU, còn Argon2id tốn CPU *và* bộ nhớ. Kẻ tấn công dựng dàn GPU/ASIC
+ * để dò offline bị chặn bởi băng thông bộ nhớ chứ không phải số nhân — thứ đắt
+ * và khó mở rộng hơn nhiều.
  *
  * Dùng `@node-rs/argon2` (Rust, nạp qua N-API) thay vì bản JavaScript thuần:
  * bản JS chạy trên chính luồng của Node, nên vài người đăng nhập đồng thời là
@@ -18,15 +17,21 @@ import { compare as bcryptCompare } from "bcryptjs";
  * cho musl, nên image Alpine không phải biên dịch gì.
  *
  * ---
- * VÌ SAO VẪN GIỮ BCRYPT
+ * KHÔNG CÓ ĐƯỜNG LUI VỀ BCRYPT — VÀ ĐÓ LÀ CHỦ ĐÍCH
  *
- * Dự án có sẵn (hoặc dữ liệu nhập từ hệ thống cũ) thường mang hash bcrypt. Gỡ
- * bcrypt đi là mọi tài khoản cũ mất quyền đăng nhập vĩnh viễn — không có cách
- * nào chuyển một hash sang thuật toán khác mà không biết mật khẩu gốc.
+ * Đây là bộ khung khởi tạo dự án MỚI: không có kho mật khẩu cũ nào để tương
+ * thích. Giữ thêm một thuật toán "phòng khi cần" là giữ một nhánh mã không ai
+ * chạy, không ai test, và là một dependency nữa phải theo dõi lỗ hổng.
  *
- * Cách xử lý: vẫn kiểm tra được hash bcrypt, và ngay lúc đó — khi mật khẩu gốc
- * còn trong bộ nhớ — băm lại bằng Argon2id rồi ghi đè. Người dùng không thấy
- * gì khác, còn dữ liệu tự chuyển dần sau mỗi lần đăng nhập.
+ * Hash bcrypt lọt vào database (do nhập dữ liệu từ hệ thống cũ) sẽ khiến
+ * `verifyPassword` trả về "sai mật khẩu" — thất bại AN TOÀN, không crash. Nếu
+ * dự án của bạn THẬT SỰ phải nhận dữ liệu cũ, cách đúng là:
+ *
+ *   1. `pnpm add bcryptjs` trong packages/core
+ *   2. Trong `verifyPassword`, nhận diện tiền tố `$2` rồi so bằng bcrypt
+ *   3. Trả `needsRehash: true` khi đúng — mỗi lần đăng nhập thành công là một
+ *      bản ghi được nâng cấp sang Argon2id mà người dùng không phải làm gì
+ *   4. Gỡ bcrypt đi sau khi số hash `$2` trong database về 0
  */
 
 /**
@@ -58,11 +63,6 @@ const ARGON2_OPTIONS = {
  */
 const CURRENT_HASH_PREFIX = `$argon2id$v=19$m=${ARGON2_OPTIONS.memoryCost},t=${ARGON2_OPTIONS.timeCost},p=${ARGON2_OPTIONS.parallelism}$`;
 
-/** Mọi biến thể bcrypt đều bắt đầu bằng `$2` — `$2a$`, `$2b$`, `$2y$`. */
-function isBcryptHash(value: string): boolean {
-  return value.startsWith("$2");
-}
-
 /**
  * Hash dùng cho phép so sánh giả. Tính một lần rồi cache.
  *
@@ -79,9 +79,12 @@ function getDummyHash(): Promise<string> {
 export type PasswordCheck = {
   valid: boolean;
   /**
-   * `true` khi mật khẩu ĐÚNG nhưng hash được sinh bằng thuật toán/tham số cũ.
-   * Nơi gọi nên băm lại và ghi đè — đây là cửa sổ duy nhất còn giữ mật khẩu
-   * gốc trong bộ nhớ.
+   * `true` khi mật khẩu ĐÚNG nhưng hash được sinh bằng THAM SỐ cũ — ví dụ sau
+   * khi bạn nâng `memoryCost` để theo kịp phần cứng mới.
+   *
+   * Nơi gọi nên băm lại và ghi đè: đây là cửa sổ duy nhất còn giữ mật khẩu gốc
+   * trong bộ nhớ. Nhờ vậy toàn bộ kho mật khẩu tự nâng cấp dần sau mỗi lần
+   * đăng nhập, không cần bắt ai đổi mật khẩu.
    */
   needsRehash: boolean;
 };
@@ -92,17 +95,13 @@ export const CryptoUtils = {
   },
 
   /**
-   * Kiểm tra mật khẩu, tự nhận diện thuật toán từ chính chuỗi hash.
+   * Kiểm tra mật khẩu.
    *
-   * KHÔNG BAO GIỜ ném lỗi: một hash rác trong database phải dẫn tới "sai mật
-   * khẩu", chứ không phải lỗi 500 làm lộ ra rằng bản ghi đó có vấn đề.
+   * KHÔNG BAO GIỜ ném lỗi: một hash rác trong database (hoặc hash thuộc thuật
+   * toán khác) phải dẫn tới "sai mật khẩu", chứ không phải lỗi 500 làm lộ ra
+   * rằng bản ghi đó có vấn đề.
    */
   async verifyPassword(password: string, passwordHash: string): Promise<PasswordCheck> {
-    if (isBcryptHash(passwordHash)) {
-      const valid = await bcryptCompare(password, passwordHash).catch(() => false);
-      return { valid, needsRehash: valid };
-    }
-
     const valid = await argon2Verify(passwordHash, password).catch(() => false);
 
     return { valid, needsRehash: valid && !passwordHash.startsWith(CURRENT_HASH_PREFIX) };

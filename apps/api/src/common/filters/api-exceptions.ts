@@ -17,6 +17,7 @@ export type ApiErrorCode =
   | "ACCOUNT_BANNED"
   | "ACCOUNT_LOCKED"
   | "PROVIDER_ERROR"
+  | "TWO_FACTOR_REQUIRED"
   | "INTERNAL_ERROR";
 
 export type ApiErrorBody = {

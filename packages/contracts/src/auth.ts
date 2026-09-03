@@ -115,3 +115,89 @@ export type OAuthProviderId = (typeof OAUTH_PROVIDERS)[number];
 export function isOAuthProviderId(value: string): value is OAuthProviderId {
   return (OAUTH_PROVIDERS as readonly string[]).includes(value);
 }
+
+// ---------------------------------------------------------------------------
+// Xác thực hai lớp (2FA)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mã 2FA: chấp nhận CẢ mã TOTP 6 số lẫn mã khôi phục 10 ký tự.
+ *
+ * Không tách hai trường vì người dùng ở màn hình đó chỉ có một ô nhập, và họ
+ * không nên phải tự phân loại thứ mình đang dán vào. `TwoFactorService` phân
+ * biệt bằng độ dài sau khi chuẩn hoá.
+ */
+export const twoFactorCodeSchema = z
+  .string()
+  .trim()
+  .min(6, "Mã xác thực quá ngắn")
+  .max(20, "Mã xác thực quá dài");
+
+export const verifyTwoFactorSchema = z.object({
+  /** Vé nhận được từ `POST /auth/login` khi tài khoản có bật 2FA. */
+  challengeToken: z.string().min(1, "Thiếu vé xác thực"),
+  code: twoFactorCodeSchema,
+});
+export type VerifyTwoFactorInput = z.infer<typeof verifyTwoFactorSchema>;
+
+export const confirmTwoFactorSchema = z.object({ code: twoFactorCodeSchema });
+export type ConfirmTwoFactorInput = z.infer<typeof confirmTwoFactorSchema>;
+
+export const disableTwoFactorSchema = z.object({
+  /** Bỏ trống với tài khoản chưa đặt mật khẩu (chỉ đăng nhập qua OAuth). */
+  password: z.string().optional(),
+  code: twoFactorCodeSchema,
+});
+export type DisableTwoFactorInput = z.infer<typeof disableTwoFactorSchema>;
+
+/**
+ * Phản hồi của `POST /auth/login` khi tài khoản có bật 2FA.
+ *
+ * Hình dạng KHÁC HẲN `AuthResponse` có chủ đích: client buộc phải rẽ nhánh
+ * tường minh thay vì đọc phải một object thiếu `tokens` rồi hỏng ở đâu đó xa
+ * hơn.
+ */
+export const twoFactorChallengeSchema = z.object({
+  twoFactorRequired: z.literal(true),
+  challengeToken: z.string(),
+  /** Số giây còn lại của vé. */
+  expiresIn: z.number(),
+});
+export type TwoFactorChallenge = z.infer<typeof twoFactorChallengeSchema>;
+
+export const twoFactorSetupSchema = z.object({
+  /** Bí mật base32 — hiển thị để người dùng nhập tay khi không quét được QR. */
+  secret: z.string(),
+  /** URI `otpauth://` để dựng mã QR. */
+  uri: z.string(),
+});
+export type TwoFactorSetupResponse = z.infer<typeof twoFactorSetupSchema>;
+
+export const twoFactorStatusSchema = z.object({
+  enabled: z.boolean(),
+  enabledAt: z.coerce.date().nullable(),
+  remainingRecoveryCodes: z.number(),
+  /** `false` khi hệ thống chưa cấu hình `ENCRYPTION_KEY` — nút bật 2FA nên ẩn. */
+  available: z.boolean(),
+});
+export type TwoFactorStatusResponse = z.infer<typeof twoFactorStatusSchema>;
+
+// ---------------------------------------------------------------------------
+// Đổi địa chỉ email
+// ---------------------------------------------------------------------------
+
+export const requestEmailChangeSchema = z.object({
+  newEmail: emailSchema,
+  /**
+   * Bắt nhập lại mật khẩu hiện tại. Đổi email là đường chiếm tài khoản kinh
+   * điển — chiếm phiên một lúc, đổi email, rồi dùng "quên mật khẩu" để chiếm
+   * vĩnh viễn.
+   */
+  password: z.string().min(1, "Vui lòng nhập mật khẩu hiện tại"),
+});
+export type RequestEmailChangeInput = z.infer<typeof requestEmailChangeSchema>;
+
+export const confirmEmailChangeSchema = z.object({
+  token: z.string().min(1, "Thiếu mã xác nhận"),
+});
+export type ConfirmEmailChangeInput = z.infer<typeof confirmEmailChangeSchema>;

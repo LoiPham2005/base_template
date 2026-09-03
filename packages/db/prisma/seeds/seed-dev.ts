@@ -34,18 +34,26 @@ export async function seedDev(prisma: PrismaClient): Promise<void> {
       select: { id: true },
     });
 
-    const user = await prisma.user.upsert({
-      where: { email: item.email },
-      update: {},
-      create: {
-        email: item.email,
-        password,
-        emailVerifiedAt: new Date(),
-        status: "ACTIVE",
-        profile: { create: { fullName: item.fullName } },
-      },
+    // `upsert` cần một khoá DUY NHẤT mà Prisma biết, nhưng `email` được ràng
+    // buộc bằng partial unique index viết tay (xem model `User`). Nên: tìm
+    // trước, tạo sau.
+    const existing = await prisma.user.findFirst({
+      where: { email: item.email, deletedAt: null },
       select: { id: true },
     });
+
+    const user =
+      existing ??
+      (await prisma.user.create({
+        data: {
+          email: item.email,
+          password,
+          emailVerifiedAt: new Date(),
+          status: "ACTIVE",
+          profile: { create: { fullName: item.fullName } },
+        },
+        select: { id: true },
+      }));
 
     await prisma.userRole.upsert({
       where: { userId_roleId: { userId: user.id, roleId: role.id } },

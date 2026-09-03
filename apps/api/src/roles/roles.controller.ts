@@ -73,7 +73,7 @@ export class RolesController {
     @CurrentUser() actor: CurrentUserPayload,
     @Req() request: FastifyRequest,
   ): Promise<Role> {
-    const role = await this.roles.create(dto);
+    const role = await this.roles.create(dto, { actorId: actor.sub });
 
     await this.audit.record({
       action: AUDIT_ACTIONS.ROLE_CREATED,
@@ -81,7 +81,7 @@ export class RolesController {
       entityId: role.id,
       actorId: actor.sub,
       actorEmail: actor.email,
-      metadata: { key: role.key, permissions: role.permissions },
+      metadata: { key: role.key, level: role.level, permissions: role.permissions },
       ip: clientIp(request),
     });
 
@@ -97,7 +97,7 @@ export class RolesController {
     @CurrentUser() actor: CurrentUserPayload,
     @Req() request: FastifyRequest,
   ): Promise<Role> {
-    const role = await this.roles.update(key, dto);
+    const role = await this.roles.update(key, dto, { actorId: actor.sub });
 
     await this.audit.record({
       action: AUDIT_ACTIONS.ROLE_UPDATED,
@@ -123,7 +123,7 @@ export class RolesController {
     @CurrentUser() actor: CurrentUserPayload,
     @Req() request: FastifyRequest,
   ): Promise<void> {
-    await this.roles.remove(key);
+    await this.roles.remove(key, { actorId: actor.sub });
 
     await this.audit.record({
       action: AUDIT_ACTIONS.ROLE_DELETED,

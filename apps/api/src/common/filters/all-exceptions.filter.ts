@@ -46,6 +46,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
     RATE_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
     // 502: lỗi nằm ở nhà cung cấp bên ngoài, không phải ở request của client.
     PROVIDER_ERROR: HttpStatus.BAD_GATEWAY,
+    /*
+     * 401 — nhưng với `code` RIÊNG.
+     *
+     * Client PHẢI phân biệt được "sai mật khẩu" với "mật khẩu đúng, cần nhập
+     * mã 2FA": hai trường hợp dẫn tới hai màn hình khác nhau. Đó là lý do
+     * `code` tồn tại như một hợp đồng riêng biệt với mã HTTP.
+     *
+     * Trên thực tế `AuthController` bắt lỗi này trước và trả về vé, nên nhánh
+     * ở đây chỉ chạy khi một nơi gọi khác quên xử lý — và lúc đó nó phải nói
+     * đúng sự thật thay vì thành 500.
+     */
+    TWO_FACTOR_REQUIRED: HttpStatus.UNAUTHORIZED,
   };
 
   catch(exception: unknown, host: ArgumentsHost): void {

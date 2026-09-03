@@ -66,6 +66,8 @@ export const publicUserSchema = z.object({
   avatarUrl: z.string().nullable(),
   status: userStatusSchema,
   emailVerifiedAt: z.coerce.date().nullable(),
+  /** `true` khi tài khoản đã bật xác thực hai lớp. */
+  twoFactorEnabled: z.boolean().default(false),
   /** Khoá của mọi vai trò đang mang, ví dụ `["ADMIN", "STAFF"]`. */
   roles: z.array(z.string()),
   createdAt: z.coerce.date(),
@@ -142,5 +144,12 @@ export const setUserPermissionSchema = z.object({
   permissionKey: z.string().min(1),
   /** `true` = cấp thêm, `false` = tước bỏ (thắng mọi vai trò). */
   isGranted: z.boolean(),
+  /**
+   * Hạn của ngoại lệ này. Bỏ trống = vĩnh viễn.
+   *
+   * Dùng cho "cấp quyền trong 24 giờ để xử lý sự cố" — nhu cầu rất thường gặp,
+   * và không có hạn thì nó âm thầm thành vĩnh viễn vì không ai nhớ quay lại gỡ.
+   */
+  expiresAt: z.coerce.date().optional(),
 });
 export type SetUserPermissionInput = z.infer<typeof setUserPermissionSchema>;

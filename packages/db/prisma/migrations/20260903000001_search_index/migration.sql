@@ -33,4 +33,4 @@ CREATE INDEX "users_username_trgm_idx"
   ON "users" USING gin ("username" gin_trgm_ops);
 
 CREATE INDEX "user_profiles_full_name_trgm_idx"
-  ON "user_profiles" USING gin ("fullName" gin_trgm_ops);
+  ON "user_profiles" USING gin ("full_name" gin_trgm_ops);
